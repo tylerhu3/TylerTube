@@ -79,6 +79,9 @@ export default function VideoPlayer({
   savedProgress,
   onTimeUpdate,
   onResetProgress,
+  isFavorited = false,
+  onToggleFavorite,
+  isHidden = false,
   isSidePlayer = false,
   onToggleSidePlayer,
   sidePlayerPrefs = { width: 440, side: "right", vertical: "bottom" },
@@ -169,6 +172,11 @@ export default function VideoPlayer({
         options
       );
     };
+
+    player.on("play", () => {
+      if (isRestoringSeekRef.current) return;
+      recordProgress({ force: true, played: true });
+    });
 
     player.on("ended", () => {
       recordProgress({ force: true, completed: true });
@@ -327,7 +335,10 @@ export default function VideoPlayer({
 
         // Record discovered duration even if starting at 0
         if (onTimeUpdateRef.current && initialSavedTime <= 0) {
-          onTimeUpdateRef.current(video.id, 0, duration, { force: true });
+          onTimeUpdateRef.current(video.id, 0, duration, {
+            force: true,
+            metadataOnly: true
+          });
         }
 
         // If previously watched but not right at the very end, seek to saved time
@@ -573,19 +584,27 @@ export default function VideoPlayer({
     });
   };
 
+  useEffect(() => {
+    if (isHidden && playerRef.current && !playerRef.current.paused) {
+      playerRef.current.pause();
+    }
+  }, [isHidden]);
+
   const floatingStyle = isSidePlayer
     ? {
       width: `${width}px`,
       [side]: `${offsetX}px`,
       [vertical]: `${offsetY}px`
     }
-    : undefined;
+    : isHidden
+      ? { display: "none" }
+      : undefined;
 
   return (
     <section
       ref={sectionRef}
       className={`player-section ${isSidePlayer ? "floating-player" : ""} ${isSidePlayer ? `dock-${side} dock-${vertical}` : ""
-        } ${isInteracting ? "is-interacting" : ""}`}
+        } ${isInteracting ? "is-interacting" : ""} ${isHidden ? "player-hidden" : ""}`}
       style={floatingStyle}
     >
       {isSidePlayer && (
@@ -788,6 +807,16 @@ export default function VideoPlayer({
           >
             Next ⏭
           </button>
+          {video?.id && onToggleFavorite && (
+            <button
+              type="button"
+              className={`ctrl-btn fav-ctrl-btn ${isFavorited ? "active" : ""}`}
+              onClick={() => onToggleFavorite(video.id)}
+              title={isFavorited ? "Remove from Favorites" : "Add to Favorites"}
+            >
+              {isFavorited ? "♥ Favorited" : "♡ Favorite"}
+            </button>
+          )}
           {video?.src && (
             <a
               href={getDownloadUrl(video)}

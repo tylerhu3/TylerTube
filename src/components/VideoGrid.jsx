@@ -46,6 +46,8 @@ export default function VideoGrid({
   onFilterWatchStatusChange,
   currentVideoId,
   watchProgress = {},
+  favorites = {},
+  onToggleFavorite,
   onSelectVideo
 }) {
   const activeCardRef = useRef(null);
@@ -134,6 +136,7 @@ export default function VideoGrid({
       <div className="video-grid">
         {videos.map((video) => {
           const isActive = video.id === currentVideoId;
+          const isFavorited = Boolean(favorites[video.id]);
           const progress = watchProgress[video.id];
           const watchedSeconds = progress?.time > 0 ? progress.time : 0;
           const watchedLabel = formatDuration(watchedSeconds);
@@ -211,18 +214,42 @@ export default function VideoGrid({
                   <div className="card-title" title={video.title}>
                     {video.title}
                   </div>
-                  {video.src && (
-                    <a
-                      href={getDownloadUrl(video)}
-                      download={getDownloadFilename(video)}
-                      className="card-download-btn"
-                      onClick={(e) => e.stopPropagation()}
-                      title={`Download ${video.title}`}
-                      aria-label={`Download ${video.title}`}
-                    >
-                      ⬇
-                    </a>
-                  )}
+                  <div className="card-action-btns">
+                    {onToggleFavorite && (
+                      <button
+                        type="button"
+                        className={`card-fav-btn ${isFavorited ? "active" : ""}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleFavorite(video.id);
+                        }}
+                        title={
+                          isFavorited
+                            ? "Remove from Favorites"
+                            : "Add to Favorites"
+                        }
+                        aria-label={
+                          isFavorited
+                            ? `Remove ${video.title} from Favorites`
+                            : `Add ${video.title} to Favorites`
+                        }
+                      >
+                        {isFavorited ? "♥" : "♡"}
+                      </button>
+                    )}
+                    {video.src && (
+                      <a
+                        href={getDownloadUrl(video)}
+                        download={getDownloadFilename(video)}
+                        className="card-download-btn"
+                        onClick={(e) => e.stopPropagation()}
+                        title={`Download ${video.title}`}
+                        aria-label={`Download ${video.title}`}
+                      >
+                        ⬇
+                      </a>
+                    )}
+                  </div>
                 </div>
                 {video.section && video.section !== "Main" && (
                   <div className="card-folder" title={video.section}>
