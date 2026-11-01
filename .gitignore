@@ -1,0 +1,37 @@
+# Dependencies & build output
+node_modules/
+dist/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Large video & media assets (keep directory structure via .gitkeep)
+public/videos/*
+!public/videos/.gitkeep
+public/thumbnails/*
+!public/thumbnails/.gitkeep
+*.mp4
+*.mkv
+*.mov
+*.webm
+*.avi
+*.m4v
+
+# Nginx & runtime logs / temp files
+*.log
+*.pid
+*.bak
+nginx_temp/
+
+# Editor & IDE directories
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables
+.env
+.env.*
