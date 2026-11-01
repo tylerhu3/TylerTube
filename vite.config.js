@@ -2,15 +2,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import {
+  generateAllThumbnails,
+  generateThumbnailForVideo
+} from "./scripts/generate-thumbnails.js";
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
+const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const MIME_TYPES = {
   ".mp4": "video/mp4",
   ".m4v": "video/mp4",
   ".mov": "video/quicktime",
   ".webm": "video/webm",
   ".vtt": "text/vtt; charset=utf-8",
-  ".srt": "text/plain; charset=utf-8"
+  ".srt": "text/plain; charset=utf-8",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp"
 };
 const naturalCollator = new Intl.Collator(undefined, {
   numeric: true,
@@ -21,16 +30,111 @@ function encodeUrlPath(segments) {
   return segments.map((segment) => encodeURIComponent(segment)).join("/");
 }
 
+function createThumbnailsMiddleware(thumbnailsDir, videosDir) {
+  return async (req, res, next) => {
+    if (!req.url || (req.method !== "GET" && req.method !== "HEAD")) {
+      return next();
+    }
+
+    const [rawPathname] = req.url.split("?");
+    if (!rawPathname.startsWith("/thumbnails/")) {
+      return next();
+    }
+
+    const relUrl = rawPathname.slice("/thumbnails/".length);
+    let decodedSegments;
+    try {
+      decodedSegments = relUrl
+        .split("/")
+        .filter(Boolean)
+        .map((segment) => decodeURIComponent(segment));
+    } catch {
+      return next();
+    }
+
+    if (decodedSegments.length === 0) {
+      return next();
+    }
+
+    const thumbPath = path.resolve(thumbnailsDir, ...decodedSegments);
+    if (
+      thumbPath !== thumbnailsDir &&
+      !thumbPath.startsWith(thumbnailsDir + path.sep)
+    ) {
+      res.statusCode = 403;
+      res.end("Forbidden");
+      return;
+    }
+
+    let stat;
+    try {
+      stat = fs.statSync(thumbPath);
+    } catch {
+      stat = null;
+    }
+
+    // If thumbnail doesn't exist yet, try generating it on the fly from the matching video
+    if (!stat || !stat.isFile() || stat.size === 0) {
+      const thumbFile = decodedSegments[decodedSegments.length - 1];
+      const baseName = path.basename(thumbFile, path.extname(thumbFile));
+      const dirSegments = decodedSegments.slice(0, -1);
+      const videoFolder = path.resolve(videosDir, ...dirSegments);
+
+      if (
+        videoFolder === videosDir ||
+        videoFolder.startsWith(videosDir + path.sep)
+      ) {
+        for (const ext of VIDEO_EXTENSIONS) {
+          const candidateVideo = path.join(videoFolder, `${baseName}${ext}`);
+          if (fs.existsSync(candidateVideo)) {
+            await generateThumbnailForVideo(candidateVideo, thumbPath);
+            try {
+              stat = fs.statSync(thumbPath);
+            } catch {
+              stat = null;
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    if (!stat || !stat.isFile()) {
+      return next();
+    }
+
+    const ext = path.extname(thumbPath).toLowerCase();
+    const contentType = MIME_TYPES[ext] || "image/jpeg";
+
+    res.writeHead(200, {
+      "Content-Length": stat.size,
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=86400"
+    });
+
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
+
+    const stream = fs.createReadStream(thumbPath);
+    req.on("close", () => stream.destroy());
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
+  };
+}
+
 function createVideoStreamMiddleware(videosDir) {
   return (req, res, next) => {
     if (!req.url || (req.method !== "GET" && req.method !== "HEAD")) {
       return next();
     }
 
-    const rawPathname = req.url.split("?")[0];
+    const [rawPathname, rawQuery = ""] = req.url.split("?");
     if (!rawPathname.startsWith("/videos/")) {
       return next();
     }
+    const isDownload = new URLSearchParams(rawQuery).get("download") === "1";
 
     const relUrl = rawPathname.slice("/videos/".length);
     let decodedSegments;
@@ -68,6 +172,14 @@ function createVideoStreamMiddleware(videosDir) {
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
     const fileSize = stat.size;
     const range = req.headers.range;
+    const fileName = path.basename(filePath);
+    const dispositionHeaders = isDownload
+      ? {
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(
+            fileName
+          )}`
+        }
+      : {};
 
     if (range) {
       const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
@@ -106,7 +218,8 @@ function createVideoStreamMiddleware(videosDir) {
         "Accept-Ranges": "bytes",
         "Content-Length": chunkSize,
         "Content-Type": contentType,
-        "Cache-Control": "no-cache"
+        "Cache-Control": "no-cache",
+        ...dispositionHeaders
       });
 
       if (req.method === "HEAD") {
@@ -125,7 +238,8 @@ function createVideoStreamMiddleware(videosDir) {
       "Accept-Ranges": "bytes",
       "Content-Length": fileSize,
       "Content-Type": contentType,
-      "Cache-Control": "no-cache"
+      "Cache-Control": "no-cache",
+      ...dispositionHeaders
     });
 
     if (req.method === "HEAD") {
@@ -163,7 +277,55 @@ function findMatchingSubtitle(dirEntries, videoBaseName, relDirSegments) {
   return "";
 }
 
-function scanVideosDirectory(videosRoot) {
+function findMatchingPoster(
+  dirEntries,
+  videoBaseName,
+  relDirSegments,
+  thumbnailsRoot
+) {
+  // 1. Check if a custom image file sits alongside the video in public/videos/
+  const entryMap = new Map(
+    dirEntries.map((entry) => [entry.name.toLowerCase(), entry.name])
+  );
+  for (const ext of IMAGE_EXTENSIONS) {
+    const candidate = `${videoBaseName}${ext}`.toLowerCase();
+    const matchedName = entryMap.get(candidate);
+    if (matchedName) {
+      return `/videos/${encodeUrlPath([...relDirSegments, matchedName])}`;
+    }
+  }
+
+  // 2. Check if a custom image extension exists in public/thumbnails/
+  const thumbDir = path.join(thumbnailsRoot, ...relDirSegments);
+  if (fs.existsSync(thumbDir)) {
+    try {
+      const thumbEntries = fs.readdirSync(thumbDir);
+      const thumbMap = new Map(
+        thumbEntries.map((name) => [name.toLowerCase(), name])
+      );
+      for (const ext of IMAGE_EXTENSIONS) {
+        const candidate = `${videoBaseName}${ext}`.toLowerCase();
+        const matchedThumb = thumbMap.get(candidate);
+        if (matchedThumb) {
+          return `/thumbnails/${encodeUrlPath([
+            ...relDirSegments,
+            matchedThumb
+          ])}`;
+        }
+      }
+    } catch {
+      // Ignore read errors
+    }
+  }
+
+  // 3. Default to generated .jpg path in /thumbnails/
+  return `/thumbnails/${encodeUrlPath([
+    ...relDirSegments,
+    `${videoBaseName}.jpg`
+  ])}`;
+}
+
+function scanVideosDirectory(videosRoot, thumbnailsRoot) {
   const results = [];
   if (!fs.existsSync(videosRoot)) {
     return results;
@@ -205,7 +367,12 @@ function scanVideosDirectory(videosRoot) {
           duration: "MP4",
           src: `/videos/${encodeUrlPath([...relSegments, entry.name])}`,
           subtitleSrc: findMatchingSubtitle(entries, baseName, relSegments),
-          poster: ""
+          poster: findMatchingPoster(
+            entries,
+            baseName,
+            relSegments,
+            thumbnailsRoot
+          )
         });
       }
     }
@@ -221,6 +388,14 @@ function videoCatalogPlugin() {
 
   return {
     name: "tylertube-video-catalog",
+    async buildStart() {
+      const videosDir = path.resolve(process.cwd(), "public/videos");
+      const thumbnailsDir = path.resolve(process.cwd(), "public/thumbnails");
+      await generateAllThumbnails({
+        videosRoot: videosDir,
+        thumbnailsRoot: thumbnailsDir
+      });
+    },
     resolveId(id) {
       if (id === virtualModuleId) {
         return resolvedVirtualModuleId;
@@ -229,12 +404,17 @@ function videoCatalogPlugin() {
     load(id) {
       if (id === resolvedVirtualModuleId) {
         const videosDir = path.resolve(process.cwd(), "public/videos");
-        const videos = scanVideosDirectory(videosDir);
+        const thumbnailsDir = path.resolve(process.cwd(), "public/thumbnails");
+        const videos = scanVideosDirectory(videosDir, thumbnailsDir);
         return `export const SCANNED_VIDEOS = ${JSON.stringify(videos)};`;
       }
     },
     configureServer(server) {
       const videosDir = path.resolve(process.cwd(), "public/videos");
+      const thumbnailsDir = path.resolve(process.cwd(), "public/thumbnails");
+      server.middlewares.use(
+        createThumbnailsMiddleware(thumbnailsDir, videosDir)
+      );
       server.middlewares.use(createVideoStreamMiddleware(videosDir));
       server.watcher.add(videosDir);
       const reloadCatalog = (filePath) => {
@@ -251,6 +431,10 @@ function videoCatalogPlugin() {
     },
     configurePreviewServer(server) {
       const videosDir = path.resolve(process.cwd(), "public/videos");
+      const thumbnailsDir = path.resolve(process.cwd(), "public/thumbnails");
+      server.middlewares.use(
+        createThumbnailsMiddleware(thumbnailsDir, videosDir)
+      );
       server.middlewares.use(createVideoStreamMiddleware(videosDir));
     }
   };

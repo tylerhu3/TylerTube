@@ -5,6 +5,8 @@ export default function Navbar({
   onSearchChange,
   isTheaterMode,
   onToggleTheater,
+  isSidePlayer,
+  onToggleSidePlayer,
   theme = "light",
   onToggleTheme
 }) {
@@ -29,6 +31,14 @@ export default function Navbar({
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
         />
+        <button
+          type="button"
+          className={`btn-secondary ${isSidePlayer ? "active" : ""}`}
+          onClick={onToggleSidePlayer}
+          title="Toggle Floating Side Player (S)"
+        >
+          ⧉ Side Player
+        </button>
         <button
           type="button"
           className={`btn-secondary ${isTheaterMode ? "active" : ""}`}
