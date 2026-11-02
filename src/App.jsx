@@ -6,11 +6,13 @@ import VideoGrid from "./components/VideoGrid";
 import HistoryPage from "./components/HistoryPage";
 import FavoritesPage from "./components/FavoritesPage";
 import { VIDEO_LIBRARY } from "./data/videos";
+import { COLOR_THEMES } from "./data/themeColors";
 
 const STORAGE_KEY = "tylertube_watch_progress";
 const FAVORITES_STORAGE_KEY = "tylertube_favorites";
 const LAST_VIDEO_STORAGE_KEY = "tylertube_last_video_id";
 const THEME_STORAGE_KEY = "tylertube_theme";
+const COLOR_THEME_STORAGE_KEY = "tylertube_color_theme";
 const SIDE_PLAYER_STORAGE_KEY = "tylertube_side_player_prefs";
 const VIEW_MODE_STORAGE_KEY = "tylertube_view_mode";
 
@@ -83,6 +85,16 @@ export default function App() {
       return "light";
     }
   });
+  const [colorTheme, setColorTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem(COLOR_THEME_STORAGE_KEY) || "red";
+      document.documentElement.setAttribute("data-color-theme", saved);
+      return saved;
+    } catch {
+      document.documentElement.setAttribute("data-color-theme", "red");
+      return "red";
+    }
+  });
   const [watchProgress, setWatchProgress] = useState(() =>
     loadSavedWatchProgress()
   );
@@ -97,6 +109,7 @@ export default function App() {
   const [selectedSection, setSelectedSection] = useState("ALL");
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isSidePlayer, setIsSidePlayer] = useState(false);
+  const [playerMode, setPlayerMode] = useState("standard");
   const [viewMode, setViewMode] = useState(() => {
     const initial = detectInitialViewMode();
     if (typeof document !== "undefined") {
@@ -458,6 +471,29 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    document.documentElement.setAttribute("data-color-theme", colorTheme);
+    try {
+      localStorage.setItem(COLOR_THEME_STORAGE_KEY, colorTheme);
+    } catch {
+      // Ignore storage errors
+    }
+
+    // Dynamically synchronize website favicon & mobile theme-color with selected color theme
+    const current =
+      COLOR_THEMES.find((c) => c.id === colorTheme) || COLOR_THEMES[0];
+    const hex = theme === "dark" ? current.darkColor : current.color;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="ttGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="${hex}"/><stop offset="100%" stop-color="${hex}"/></linearGradient></defs><rect x="2" y="6" width="28" height="20" rx="5.5" fill="${hex}"/><polygon points="13.2,10.6 21.2,16 13.2,21.4" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="0.8" stroke-linejoin="round"/></svg>`;
+    const link = document.querySelector("link[type='image/svg+xml']");
+    if (link) {
+      link.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    }
+    const metaTheme = document.querySelector("meta[name='theme-color']");
+    if (metaTheme) {
+      metaTheme.setAttribute("content", hex);
+    }
+  }, [colorTheme, theme]);
+
+  useEffect(() => {
     document.documentElement.setAttribute("data-view-mode", viewMode);
   }, [viewMode]);
 
@@ -510,7 +546,11 @@ export default function App() {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }, []);
 
-  // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player, 'M' for Mobile/Desktop View when not typing in inputs
+  const togglePlayerMode = useCallback(() => {
+    setPlayerMode((prev) => (prev === "drive" ? "standard" : "drive"));
+  }, []);
+
+  // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player, 'M' for Mobile/Desktop View, 'D' for Drive Player when not typing in inputs
   useEffect(() => {
     const handleKeyDown = (e) => {
       const tag = document.activeElement?.tagName?.toLowerCase();
@@ -523,11 +563,13 @@ export default function App() {
         toggleSidePlayer();
       } else if (key === "m") {
         toggleViewMode();
+      } else if (key === "d") {
+        togglePlayerMode();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleTheaterMode, toggleSidePlayer, toggleViewMode, currentPage, viewMode]);
+  }, [toggleTheaterMode, toggleSidePlayer, toggleViewMode, togglePlayerMode, currentPage, viewMode]);
 
   const isPlayerHidden = currentPage !== "home" && !isSidePlayer;
 
@@ -540,10 +582,14 @@ export default function App() {
         onToggleTheater={toggleTheaterMode}
         isSidePlayer={isSidePlayer}
         onToggleSidePlayer={toggleSidePlayer}
+        playerMode={playerMode}
+        onTogglePlayerMode={togglePlayerMode}
         viewMode={viewMode}
         onViewModeChange={handleViewModeChange}
         theme={theme}
         onToggleTheme={toggleTheme}
+        colorTheme={colorTheme}
+        onColorThemeChange={setColorTheme}
         onToggleMenu={() => setIsMenuOpen((prev) => !prev)}
         currentPage={currentPage}
         onNavigate={setCurrentPage}
@@ -556,6 +602,8 @@ export default function App() {
         onNavigate={setCurrentPage}
         viewMode={viewMode}
         onViewModeChange={handleViewModeChange}
+        colorTheme={colorTheme}
+        onColorThemeChange={setColorTheme}
         totalVideosCount={VIDEO_LIBRARY.length}
         historyCount={historyItems.length}
         favoritesCount={favoriteItems.length}
@@ -589,6 +637,9 @@ export default function App() {
           sidePlayerPrefs={sidePlayerPrefs}
           onUpdateSidePlayerPrefs={updateSidePlayerPrefs}
           viewMode={viewMode}
+          playerMode={playerMode}
+          onTogglePlayerMode={togglePlayerMode}
+          onToggleTheater={toggleTheaterMode}
         />
 
         {currentPage === "home" && (

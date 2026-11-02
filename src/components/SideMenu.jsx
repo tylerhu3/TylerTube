@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { COLOR_THEMES } from "../data/themeColors";
 
 export default function SideMenu({
   isOpen,
@@ -7,6 +8,8 @@ export default function SideMenu({
   onNavigate,
   viewMode = "desktop",
   onViewModeChange,
+  colorTheme = "red",
+  onColorThemeChange,
   totalVideosCount = 0,
   historyCount = 0,
   favoritesCount = 0,
@@ -141,6 +144,32 @@ export default function SideMenu({
                 <span>Saved Favorites</span>
                 <strong>{favoritesCount}</strong>
               </div>
+            </div>
+          </div>
+
+          <div className="side-menu-divider" />
+
+          <div className="side-menu-section">
+            <div className="side-menu-section-title">Accent Theme</div>
+            <div className="side-menu-color-grid">
+              {COLOR_THEMES.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`side-menu-color-btn ${
+                    colorTheme === c.id ? "active" : ""
+                  }`}
+                  onClick={() => onColorThemeChange?.(c.id)}
+                  title={`Switch to ${c.name} accent`}
+                  aria-label={`Switch to ${c.name} accent`}
+                >
+                  <span
+                    className="side-menu-color-dot"
+                    style={{ backgroundColor: c.color }}
+                  />
+                  <span className="side-menu-color-text">{c.name}</span>
+                </button>
+              ))}
             </div>
           </div>
 

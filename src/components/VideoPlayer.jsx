@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Plyr from "plyr";
 import "plyr/dist/plyr.css";
+import DriveVideoPlayer from "./DriveVideoPlayer";
 
 function srtToVtt(srtText) {
   const normalized = srtText
@@ -86,10 +87,15 @@ export default function VideoPlayer({
   onToggleSidePlayer,
   sidePlayerPrefs = { width: 440, side: "right", vertical: "bottom" },
   onUpdateSidePlayerPrefs,
-  viewMode = "desktop"
+  viewMode = "desktop",
+  playerMode = "standard",
+  onTogglePlayerMode,
+  onToggleTheater
 }) {
+  const isDriveMode = playerMode === "drive";
   const containerRef = useRef(null);
   const playerRef = useRef(null);
+  const drivePlayerRef = useRef(null);
   const sectionRef = useRef(null);
   const onEndedRef = useRef(onEnded);
   const onTimeUpdateRef = useRef(onTimeUpdate);
@@ -419,6 +425,9 @@ export default function VideoPlayer({
   }, [video]);
 
   const handleRestartFromBeginning = () => {
+    if (isDriveMode && drivePlayerRef.current) {
+      drivePlayerRef.current.seekTo(0);
+    }
     const player = playerRef.current;
     if (player && player.media) {
       player.currentTime = 0;
@@ -432,6 +441,10 @@ export default function VideoPlayer({
   };
 
   const handleJumpToSavedTime = (targetTime) => {
+    if (isDriveMode && drivePlayerRef.current && targetTime > 0) {
+      drivePlayerRef.current.seekTo(targetTime);
+      return;
+    }
     const player = playerRef.current;
     if (!player || !player.media || !(targetTime > 0)) return;
     const duration = Number(player.duration || player.media.duration || 0);
@@ -446,10 +459,18 @@ export default function VideoPlayer({
   };
 
   const handleRewind = () => {
+    if (isDriveMode && drivePlayerRef.current) {
+      drivePlayerRef.current.skipBy(-10);
+      return;
+    }
     playerRef.current?.rewind(10);
   };
 
   const handleForward = () => {
+    if (isDriveMode && drivePlayerRef.current) {
+      drivePlayerRef.current.skipBy(10);
+      return;
+    }
     playerRef.current?.forward(10);
   };
 
@@ -594,10 +615,10 @@ export default function VideoPlayer({
   };
 
   useEffect(() => {
-    if (isHidden && playerRef.current && !playerRef.current.paused) {
+    if ((isHidden || isDriveMode) && playerRef.current && !playerRef.current.paused) {
       playerRef.current.pause();
     }
-  }, [isHidden]);
+  }, [isHidden, isDriveMode]);
 
   const floatingStyle = isSidePlayer
     ? {
@@ -743,7 +764,26 @@ export default function VideoPlayer({
         </>
       )}
 
-      <div className="video-wrapper" ref={containerRef} />
+      <div
+        className="video-wrapper"
+        ref={containerRef}
+        style={isDriveMode ? { display: "none" } : undefined}
+      />
+
+      {isDriveMode && (
+        <div className="video-wrapper drive-mode-wrapper">
+          <DriveVideoPlayer
+            ref={drivePlayerRef}
+            video={video}
+            savedTime={savedTime}
+            onTimeUpdate={onTimeUpdate}
+            onEnded={onEnded}
+            isHidden={isHidden}
+            onToggleTheater={onToggleTheater}
+            onSwitchToStandard={onTogglePlayerMode}
+          />
+        </div>
+      )}
 
       <div className="player-bar">
         <div className="video-meta">
@@ -783,6 +823,20 @@ export default function VideoPlayer({
           </div>
         </div>
         <div className="custom-controls">
+          {onTogglePlayerMode && (
+            <button
+              type="button"
+              className={`ctrl-btn drive-switch-btn ${isDriveMode ? "active" : ""}`}
+              onClick={onTogglePlayerMode}
+              title={
+                isDriveMode
+                  ? "Switch back to Standard Video Player (D)"
+                  : "Switch to Tesla Drive MPEG1 Video Player (D)"
+              }
+            >
+              {isDriveMode ? "🎬 Standard Player" : "🚗 Drive Player"}
+            </button>
+          )}
           <button
             type="button"
             className="ctrl-btn"

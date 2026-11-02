@@ -24,12 +24,67 @@ export function formatDriveTime(sec) {
   return `${m}:${sStr}`;
 }
 
+const BUFFER_OPTIONS = [
+  { label: "1s (Fast)", target: 1.0 },
+  { label: "2s (Normal)", target: 2.0 },
+  { label: "5s (Mobile / Deep)", target: 5.0 }
+];
+
 function ensureJSMpegPatched() {
   const JSMpeg = typeof window !== "undefined" ? window.JSMpeg : null;
   if (!JSMpeg) return null;
-  if (JSMpeg.__tylertubePatchedV2) return JSMpeg;
+  if (JSMpeg.__tylertubePatchedV3) return JSMpeg;
 
-  // 1. Safe WebSocket destroy + JSON control message handling + paused seek preview
+  // 1. BitBuffer patch: never discard unread bytes on EVICT overflow; expand buffer instead
+  if (JSMpeg.BitBuffer) {
+    JSMpeg.BitBuffer.prototype.evict = function (neededBytes) {
+      const readBytes = this.index >> 3;
+      if (readBytes > 0) {
+        if (this.bytes.copyWithin) {
+          this.bytes.copyWithin(0, readBytes, this.byteLength);
+        } else {
+          this.bytes.set(this.bytes.subarray(readBytes, this.byteLength), 0);
+        }
+        this.byteLength -= readBytes;
+        this.index -= readBytes << 3;
+      }
+    };
+
+    JSMpeg.BitBuffer.prototype.write = function (buffers) {
+      const isArray = typeof buffers[0] === "object";
+      let totalBytes = 0;
+      if (isArray) {
+        for (let i = 0; i < buffers.length; i++) totalBytes += buffers[i].byteLength;
+      } else {
+        totalBytes = buffers.byteLength;
+      }
+      const available = this.bytes.length - this.byteLength;
+      if (totalBytes > available) {
+        if (this.mode === JSMpeg.BitBuffer.MODE.EXPAND) {
+          const newSize = Math.max(2 * this.bytes.length, this.bytes.length + totalBytes);
+          this.resize(newSize);
+        } else {
+          this.evict(totalBytes);
+          // If still insufficient space after evicting read bytes, expand rather than wiping unread data
+          if (totalBytes > this.bytes.length - this.byteLength) {
+            const newSize = Math.max(
+              this.bytes.length * 2,
+              this.byteLength + totalBytes + 1024 * 1024
+            );
+            this.resize(newSize);
+          }
+        }
+      }
+      if (isArray) {
+        for (let i = 0; i < buffers.length; i++) this.appendSingleBuffer(buffers[i]);
+      } else {
+        this.appendSingleBuffer(buffers);
+      }
+      return totalBytes;
+    };
+  }
+
+  // 2. Safe WebSocket destroy + JSON control message handling + paused seek preview
   if (JSMpeg.Source && JSMpeg.Source.WebSocket) {
     JSMpeg.Source.WebSocket.prototype.destroy = function () {
       clearTimeout(this.reconnectTimeoutId);
@@ -73,7 +128,7 @@ function ensureJSMpegPatched() {
     };
   }
 
-  // 2. Track exact MPEG-TS 90kHz PTS per frame in Video & Audio decoders
+  // 3. Track exact MPEG-TS 90kHz PTS per frame in Video & Audio decoders (never purge PTS queue on false)
   function patchDecoderPts(DecoderClass) {
     if (!DecoderClass || !DecoderClass.prototype || DecoderClass.__ptsPatched) {
       return;
@@ -102,8 +157,6 @@ function ensureJSMpegPatched() {
         if (this.ptsQueue && this.ptsQueue.length > 0) {
           this.decodedTime = this.ptsQueue.shift();
         }
-      } else if (this.ptsQueue && this.ptsQueue.length > 1) {
-        this.ptsQueue.splice(0, this.ptsQueue.length - 1);
       }
       return ok;
     };
@@ -118,7 +171,7 @@ function ensureJSMpegPatched() {
     patchDecoderPts(JSMpeg.Decoder.MP2AudioWASM);
   }
 
-  // 3. Hardware-clock WebAudio output with suspended-context protection & clean resync
+  // 4. Hardware-clock WebAudio output with suspended-context protection & clean resync
   if (JSMpeg.AudioOutput && JSMpeg.AudioOutput.WebAudio) {
     const WA = JSMpeg.AudioOutput.WebAudio;
     WA.prototype.play = function (sampleRate, left, right) {
@@ -179,7 +232,7 @@ function ensureJSMpegPatched() {
     };
   }
 
-  // 4. Synchronize video frame decoding to real-time audio PTS clock + safe destroy
+  // 5. Intelligent Jitter Buffer + Smooth A/V Sync + Underrun Detection
   if (JSMpeg.Player) {
     const origStartLoading = JSMpeg.Player.prototype.startLoading;
     JSMpeg.Player.prototype.startLoading = function () {
@@ -195,7 +248,7 @@ function ensureJSMpegPatched() {
         this.audio.__onPtsObserved = this.__onPtsObserved;
       }
       if (this.audioOut) {
-        this.audioOut.__isPaused = Boolean(this.__isPaused);
+        this.audioOut.__isPaused = Boolean(this.__isPaused || this.__isBuffering);
         this.audioOut.__isMuted = Boolean(this.__isMuted);
       }
       return res;
@@ -242,22 +295,119 @@ function ensureJSMpegPatched() {
     };
 
     JSMpeg.Player.prototype.updateForStreaming = function () {
-      if (this.__isPaused || this.__destroyed) return;
+      if (this.__destroyed) return;
 
-      if (this.audio) {
-        let decodedAudio = false;
-        do {
-          if (this.audioOut.enqueuedTime > this.maxAudioLag) {
-            this.audioOut.resetEnqueuedTime();
-            this.audioOut.enabled = false;
+      // 1. Calculate how much decoded/queued media is buffered ahead
+      const vLatest = this.video ? this.video.lastWritePts : -1;
+      const aLatest = this.audio ? this.audio.lastWritePts : -1;
+      const latestWritePts = Math.max(vLatest, aLatest);
+
+      const vDecoded = this.video ? this.video.decodedTime : 0;
+      const aDecoded = this.audio ? this.audio.decodedTime : 0;
+      const currentPts = aDecoded > 0 ? aDecoded : vDecoded;
+
+      let bufferedAhead = 0;
+      if (latestWritePts > 0 && currentPts > 0 && latestWritePts >= currentPts) {
+        bufferedAhead = latestWritePts - currentPts;
+      }
+      this.__bufferedAhead = bufferedAhead;
+
+      if (this.__onBufferStats) {
+        this.__onBufferStats(bufferedAhead, latestWritePts);
+      }
+
+      // 2. Check if user paused
+      if (this.__isPaused) {
+        if (this.needsPausedPreview && this.video) {
+          if (this.video.decode()) {
+            this.needsPausedPreview = false;
           }
-          decodedAudio = this.audio.decode();
-        } while (decodedAudio);
+        }
+        return;
+      }
+
+      const now = JSMpeg.Now();
+      const targetBuffer = this.__bufferingTarget || 2.0;
+      const dur = this.__mediaDuration || 0;
+      const curMedia = this.__currentMediaTime || 0;
+      const isNearEnd = dur > 0 && curMedia >= dur - 1.2;
+      const effectiveTarget = isNearEnd ? Math.max(0.3, dur - curMedia) : targetBuffer;
+
+      // 3. Handle Buffering State (initial connect, seek, or network starvation)
+      if (this.__isBuffering) {
+        if (this.needsPausedPreview && this.video) {
+          if (this.video.decode()) {
+            this.needsPausedPreview = false;
+          }
+        }
+
+        const waitElapsed = this.__bufferingStartTime ? Date.now() - this.__bufferingStartTime : 0;
+        const reachedTarget = bufferedAhead >= effectiveTarget;
+        const timedOut = waitElapsed >= 3000 && (bufferedAhead >= 0.4 || isNearEnd);
+
+        if (reachedTarget || timedOut) {
+          this.__isBuffering = false;
+          if (this.audioOut) {
+            this.audioOut.__isPaused = false;
+            this.audioOut.resetEnqueuedTime();
+          }
+          if (this.__onBufferingStateChange) {
+            this.__onBufferingStateChange(false, bufferedAhead);
+          }
+          this.lastVideoWallTime = now;
+        } else {
+          // Still buffering: hold WebAudio and do not advance video
+          if (this.audioOut) {
+            this.audioOut.__isPaused = true;
+          }
+          if (this.__onBufferingStateChange) {
+            this.__onBufferingStateChange(true, bufferedAhead);
+          }
+          return;
+        }
+      }
+
+      // 4. Decode audio frames into WebAudio with controlled lookahead (~0.45s)
+      // This prevents dumping huge amounts into WebAudio while preserving the compressed buffer
+      if (this.audio && this.audioOut) {
+        const TARGET_AUDIO_AHEAD = 0.45;
+        let loopCount = 0;
+        while (
+          this.audioOut.enqueuedTime < TARGET_AUDIO_AHEAD &&
+          loopCount < 16
+        ) {
+          const decoded = this.audio.decode();
+          if (!decoded) break;
+          loopCount++;
+        }
         this.audioOut.enabled = true;
       }
 
       if (!this.video) return;
 
+      // 5. Starvation / buffer underrun detection during active playback
+      const hasQueuedVideo = Boolean(this.video.ptsQueue && this.video.ptsQueue.length > 0);
+      const isStarved =
+        !isNearEnd &&
+        bufferedAhead < 0.2 &&
+        !hasQueuedVideo &&
+        (!this.audio || !this.audio.ptsQueue || this.audio.ptsQueue.length === 0);
+
+      if (isStarved) {
+        this.__isBuffering = true;
+        this.__bufferingStartTime = Date.now();
+        this.__bufferingTarget = Math.max(targetBuffer, 2.2);
+        if (this.audioOut) {
+          this.audioOut.__isPaused = true;
+          this.audioOut.resetEnqueuedTime();
+        }
+        if (this.__onBufferingStateChange) {
+          this.__onBufferingStateChange(true, bufferedAhead);
+        }
+        return;
+      }
+
+      // 6. Video decoding synchronized to audible sound coming from speakers
       const hasAudioClock =
         this.audio &&
         this.audio.canPlay &&
@@ -267,7 +417,6 @@ function ensureJSMpegPatched() {
           this.audioOut.context.state === "running");
 
       if (!hasAudioClock) {
-        const now = JSMpeg.Now();
         const frameDur = 1 / (this.video.frameRate || 30);
         if (
           !this.lastVideoWallTime ||
@@ -281,7 +430,12 @@ function ensureJSMpegPatched() {
       }
 
       const offset = this.syncOffset || 0;
-      const audioPts = this.audio.currentTime + offset;
+      const audibleAudioPts = Math.max(
+        0,
+        this.audio.decodedTime - (this.audioOut ? this.audioOut.enqueuedTime : 0)
+      );
+      const targetAudioPts = audibleAudioPts + offset;
+
       let videoPts = this.video.decodedTime;
       const frameStep = 1 / (this.video.frameRate || 30);
       let nextVideoPts =
@@ -292,19 +446,19 @@ function ensureJSMpegPatched() {
             : 0;
 
       // Initial frame or large PTS discontinuity
-      if (videoPts === 0 || Math.abs(nextVideoPts - audioPts) > 3.0) {
+      if (videoPts === 0 || Math.abs(nextVideoPts - targetAudioPts) > 3.0) {
         this.video.decode();
         return;
       }
 
       const tolerance = 0.5 * frameStep;
-      const lag = audioPts - nextVideoPts;
-      const maxCatchupFrames = lag > 0.25 ? 12 : 4;
+      const lag = targetAudioPts - nextVideoPts;
+      const maxCatchupFrames = lag > 0.25 ? 8 : 3;
       let decodedCount = 0;
 
       while (
         decodedCount < maxCatchupFrames &&
-        nextVideoPts <= audioPts + tolerance
+        nextVideoPts <= targetAudioPts + tolerance
       ) {
         if (!this.video.decode()) break;
         decodedCount++;
@@ -317,12 +471,13 @@ function ensureJSMpegPatched() {
     };
   }
 
-  JSMpeg.__tylertubePatchedV2 = true;
+  JSMpeg.__tylertubePatchedV3 = true;
   return JSMpeg;
 }
 
 function flushPlayerBuffers(player) {
   if (!player) return;
+  player.__bufferedAhead = 0;
   if (player.demuxer) {
     player.demuxer.leftoverBytes = null;
     player.demuxer.bits = null;
@@ -414,10 +569,16 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
   const onEndedRef = useRef(onEnded);
   const videoIdRef = useRef(video?.id);
   const initialSavedTimeRef = useRef(savedTime);
+  const bufferTargetRef = useRef(2.0);
+  const isBufferingRef = useRef(true);
 
   const [useTestVideo, setUseTestVideo] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(true);
+  const [bufferedAheadSec, setBufferedAheadSec] = useState(0);
+  const [bufferedPct, setBufferedPct] = useState(0);
+  const [bufferMode, setBufferMode] = useState("normal");
   const [isMuted, setIsMuted] = useState(false);
   const [volumePct, setVolumePct] = useState(100);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
@@ -550,13 +711,23 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
       }
       isEndedRef.current = false;
       setIsEnded(false);
+      isBufferingRef.current = true;
+      setIsBuffering(true);
       seekBaseTimeRef.current = clamped;
       currentMediaTimeRef.current = clamped;
       firstStreamPtsRef.current = null;
       setDisplayTime(clamped);
 
-      if (isPausedRef.current) {
+      if (p) {
+        p.__isBuffering = true;
+        p.__bufferingStartTime = Date.now();
+        p.__bufferingTarget = bufferTargetRef.current;
+        p.__currentMediaTime = clamped;
         p.needsPausedPreview = true;
+        if (p.audioOut) {
+          p.audioOut.__isPaused = true;
+          p.audioOut.resetEnqueuedTime();
+        }
       }
       showControlsTemporarily();
       sendWsCommand({ type: "seek", time: clamped });
@@ -893,6 +1064,7 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
 
     isPausedRef.current = false;
     isEndedRef.current = false;
+    isBufferingRef.current = true;
     firstStreamPtsRef.current = null;
     seekBaseTimeRef.current = startSeek;
     currentMediaTimeRef.current = startSeek;
@@ -900,6 +1072,9 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
 
     setIsPaused(false);
     setIsEnded(false);
+    setIsBuffering(true);
+    setBufferedAheadSec(0);
+    setBufferedPct(0);
     setDisplayTime(startSeek);
     setDuration(0);
     setFps(0);
@@ -920,9 +1095,9 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
       canvas: nc,
       audio: true,
       streaming: true,
-      videoBufferSize: 2 * 1024 * 1024,
-      audioBufferSize: 512 * 1024,
-      maxAudioLag: 0.6,
+      videoBufferSize: 16 * 1024 * 1024,
+      audioBufferSize: 4 * 1024 * 1024,
+      maxAudioLag: 2.0,
       pauseWhenHidden: false,
       preserveDrawingBuffer: true,
       onControlMessage: (msg) => {
@@ -938,6 +1113,10 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
           playbackSpeedRef.current = spd;
           currentQualityRef.current = q;
           loopEnabledRef.current = Boolean(msg.loop);
+          if (playerRef.current) {
+            playerRef.current.__mediaDuration = dur;
+            playerRef.current.__currentMediaTime = sk;
+          }
           setDuration(dur);
           setDisplayTime(sk);
           setPlaybackSpeed(spd);
@@ -946,13 +1125,24 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
         } else if (msg.type === "reset") {
           flushPlayerBuffers(playerRef.current);
           firstStreamPtsRef.current = null;
+          isBufferingRef.current = true;
+          setIsBuffering(true);
           const sk = parseFloat(msg.seekTime) || 0;
           seekBaseTimeRef.current = sk;
           currentMediaTimeRef.current = sk;
+          if (playerRef.current) {
+            playerRef.current.__isBuffering = true;
+            playerRef.current.__bufferingStartTime = Date.now();
+            playerRef.current.__bufferingTarget = bufferTargetRef.current;
+            playerRef.current.__currentMediaTime = sk;
+          }
           if (msg.duration) {
             mediaDurationRef.current =
               parseFloat(msg.duration) || mediaDurationRef.current;
             setDuration(mediaDurationRef.current);
+            if (playerRef.current) {
+              playerRef.current.__mediaDuration = mediaDurationRef.current;
+            }
           }
           if (msg.speed) {
             playbackSpeedRef.current =
@@ -973,7 +1163,10 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
         } else if (msg.type === "ended") {
           isEndedRef.current = true;
           isPausedRef.current = true;
+          isBufferingRef.current = false;
+          setIsBuffering(false);
           if (playerRef.current) {
+            playerRef.current.__isBuffering = false;
             playerRef.current.__isPaused = true;
             if (playerRef.current.audioOut) {
               playerRef.current.audioOut.__isPaused = true;
@@ -1010,6 +1203,9 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
         if (cancelled || !p) return;
         fpsCount++;
 
+        p.__mediaDuration = mediaDurationRef.current;
+        p.__currentMediaTime = currentMediaTimeRef.current;
+
         const vPts = p.video ? p.video.decodedTime : 0;
         const aPts =
           p.audio && p.audio.decodedTime > 0 ? p.audio.currentTime : vPts;
@@ -1029,6 +1225,7 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
           const dur = mediaDurationRef.current;
           const clamped = dur > 0 ? Math.min(dur, computed) : computed;
           currentMediaTimeRef.current = clamped;
+          p.__currentMediaTime = clamped;
 
           if (!isDraggingSeekRef.current) {
             setDisplayTime(clamped);
@@ -1069,14 +1266,21 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
             p.audio.decodedTime > 0 &&
             p.video.decodedTime > 0
           ) {
+            const audibleAudioPts = Math.max(
+              0,
+              p.audio.decodedTime - (p.audioOut ? p.audioOut.enqueuedTime : 0)
+            );
             driftMs = Math.round(
               (p.video.decodedTime -
-                (p.audio.currentTime + (p.syncOffset || 0))) *
+                (audibleAudioPts + (p.syncOffset || 0))) *
                 1000
             );
           }
 
-          if (audioLocked) {
+          const bufSec = p.__bufferedAhead || 0;
+          if (isBufferingRef.current) {
+            setStatusText(`Buffering... (${bufSec.toFixed(1)}s)`);
+          } else if (audioLocked) {
             setStatusText("Tap anywhere to unmute");
           } else if (
             p.audio &&
@@ -1098,6 +1302,8 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
             `Source: ${displayChannelName} (VOD)`,
             `Resolution: ${nc.width}x${nc.height} @ ${currentFps} fps`,
             `Quality / Speed: ${currentQualityRef.current}p / ${playbackSpeedRef.current}x`,
+            `Buffer Health: ${bufSec.toFixed(1)}s (Target: ${bufferTargetRef.current}s)`,
+            `Buffer Status: ${isBufferingRef.current ? "Buffering (Waiting for data)" : "Healthy"}`,
             `A/V Drift: ${driftMs > 0 ? "+" : ""}${driftMs} ms (Sync: ${Math.round(
               syncOffsetRef.current * 1000
             )} ms)`,
@@ -1113,6 +1319,30 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
         }
       }
     });
+
+    player.__isBuffering = true;
+    player.__bufferingStartTime = Date.now();
+    player.__bufferingTarget = bufferTargetRef.current;
+    player.__mediaDuration = 0;
+    player.__currentMediaTime = startSeek;
+
+    player.__onBufferingStateChange = (buffering, bufSec) => {
+      isBufferingRef.current = buffering;
+      setIsBuffering(buffering);
+      setBufferedAheadSec(Math.max(0, bufSec || 0));
+    };
+
+    player.__onBufferStats = (bufSec, latestPts) => {
+      const dur = mediaDurationRef.current;
+      setBufferedAheadSec(Math.max(0, bufSec || 0));
+      if (firstStreamPtsRef.current !== null && dur > 0 && latestPts > 0) {
+        const elapsed = latestPts - firstStreamPtsRef.current;
+        const bufferedEnd =
+          seekBaseTimeRef.current + elapsed * playbackSpeedRef.current;
+        const pct = Math.max(0, Math.min(100, (bufferedEnd / dur) * 100));
+        setBufferedPct(pct);
+      }
+    };
 
     player.__onPtsObserved = (pts) => {
       if (firstStreamPtsRef.current === null && pts > 0) {
@@ -1326,8 +1556,16 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
           <span className="yt-ch-title" title={displayChannelName}>
             {displayChannelName}
           </span>
-          <span className="yt-fps-pill">{fps} FPS</span>
-          <span className="yt-sub-status">{statusText}</span>
+          {isBuffering ? (
+            <span className="yt-fps-pill yt-buffering-pill">
+              Buffering {bufferedAheadSec.toFixed(1)}s
+            </span>
+          ) : (
+            <span className="yt-fps-pill">{fps} FPS</span>
+          )}
+          <span className="yt-sub-status">
+            {isBuffering ? "Buffering..." : statusText}
+          </span>
         </div>
       </div>
 
@@ -1337,6 +1575,16 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
         ref={canvasHostRef}
         onClick={handleCanvasClick}
       />
+
+      {/* Centered Buffering Spinner Overlay */}
+      {isBuffering && !isPaused && (
+        <div className="yt-buffering-overlay">
+          <div className="yt-buffering-spinner" />
+          <div className="yt-buffering-text">
+            Buffering... {bufferedAheadSec > 0 ? `(${bufferedAheadSec.toFixed(1)}s)` : ""}
+          </div>
+        </div>
+      )}
 
       {/* Center Bezel Feedback Animation */}
       {bezelType && (
@@ -1425,6 +1673,45 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
                 onClick={() => handleSetQuality(q)}
               >
                 {q}p
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="yt-menu-section">
+          <div className="yt-menu-label">
+            <span>Buffer Headroom</span>
+            <span>
+              {bufferMode === "fast"
+                ? "1s (Fast)"
+                : bufferMode === "deep"
+                  ? "5s (Mobile / Deep)"
+                  : "2s (Normal)"}
+            </span>
+          </div>
+          <div className="yt-chip-row">
+            {BUFFER_OPTIONS.map((opt) => (
+              <button
+                key={opt.target}
+                type="button"
+                className={`yt-chip ${
+                  bufferTargetRef.current === opt.target ? "active" : ""
+                }`}
+                onClick={() => {
+                  bufferTargetRef.current = opt.target;
+                  setBufferMode(
+                    opt.target === 1.0
+                      ? "fast"
+                      : opt.target === 5.0
+                        ? "deep"
+                        : "normal"
+                  );
+                  if (playerRef.current) {
+                    playerRef.current.__bufferingTarget = opt.target;
+                  }
+                }}
+              >
+                {opt.label}
               </button>
             ))}
           </div>
@@ -1546,6 +1833,10 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
             </div>
           )}
           <div className="yt-progress-track">
+            <div
+              className="yt-progress-buffered"
+              style={{ width: `${bufferedPct}%` }}
+            />
             <div
               className="yt-progress-hover"
               style={{ width: `${hoverPct}%` }}

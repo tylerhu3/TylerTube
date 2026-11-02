@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { COLOR_THEMES } from "../data/themeColors";
 
 export default function Navbar({
   searchQuery,
@@ -7,10 +8,14 @@ export default function Navbar({
   onToggleTheater,
   isSidePlayer,
   onToggleSidePlayer,
+  playerMode = "standard",
+  onTogglePlayerMode,
   viewMode = "desktop",
   onViewModeChange,
   theme = "light",
   onToggleTheme,
+  colorTheme = "red",
+  onColorThemeChange,
   onToggleMenu,
   currentPage = "home",
   onNavigate
@@ -18,7 +23,28 @@ export default function Navbar({
   const isLight = theme === "light";
   const isMobileMode = viewMode === "mobile";
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
   const mobileSearchInputRef = useRef(null);
+  const colorPickerRef = useRef(null);
+
+  const activeColorMeta =
+    COLOR_THEMES.find((c) => c.id === colorTheme) || COLOR_THEMES[0];
+
+  useEffect(() => {
+    if (!isColorPickerOpen) return;
+    const handleClickOutside = (e) => {
+      if (
+        colorPickerRef.current &&
+        !colorPickerRef.current.contains(e.target)
+      ) {
+        setIsColorPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isColorPickerOpen]);
 
   useEffect(() => {
     if (mobileSearchOpen && mobileSearchInputRef.current) {
@@ -164,6 +190,29 @@ export default function Navbar({
             </button>
           )}
 
+          {onTogglePlayerMode && (
+            <button
+              type="button"
+              className={`btn-secondary drive-mode-nav-btn ${
+                playerMode === "drive" ? "active" : ""
+              }`}
+              onClick={onTogglePlayerMode}
+              title={
+                playerMode === "drive"
+                  ? "Switch to Standard Video Player (D)"
+                  : "Switch to Tesla Drive MPEG1 Video Player (D)"
+              }
+            >
+              {isMobileMode
+                ? playerMode === "drive"
+                  ? "🎬"
+                  : "🚗"
+                : playerMode === "drive"
+                  ? "🎬 Standard Player"
+                  : "🚗 Drive Player"}
+            </button>
+          )}
+
           {!isMobileMode && (
             <button
               type="button"
@@ -185,6 +234,58 @@ export default function Navbar({
               Theater Mode
             </button>
           )}
+
+          {/* Color Theme Picker Dropdown */}
+          <div className="color-theme-dropdown-wrap" ref={colorPickerRef}>
+            <button
+              type="button"
+              className="btn-secondary color-theme-btn"
+              onClick={() => setIsColorPickerOpen((prev) => !prev)}
+              title="Change Accent Color Theme"
+              aria-label="Change Accent Color Theme"
+              aria-expanded={isColorPickerOpen}
+            >
+              <span
+                className="color-theme-btn-swatch"
+                style={{ backgroundColor: activeColorMeta.color }}
+              />
+              {!isMobileMode && (
+                <span className="color-theme-btn-label">Color</span>
+              )}
+            </button>
+
+            {isColorPickerOpen && (
+              <div className="color-theme-dropdown" role="menu">
+                <div className="color-theme-dropdown-title">Theme Color</div>
+                <div className="color-theme-palette-grid">
+                  {COLOR_THEMES.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`color-palette-btn ${
+                        colorTheme === c.id ? "active" : ""
+                      }`}
+                      onClick={() => {
+                        onColorThemeChange?.(c.id);
+                        setIsColorPickerOpen(false);
+                      }}
+                      title={`Switch to ${c.name} accent`}
+                      aria-label={`Switch to ${c.name} accent`}
+                    >
+                      <span
+                        className="color-swatch-circle"
+                        style={{ backgroundColor: c.color }}
+                      />
+                      <span className="color-swatch-name">{c.name}</span>
+                      {colorTheme === c.id && (
+                        <span className="color-check-icon">✓</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
           <button
             type="button"
