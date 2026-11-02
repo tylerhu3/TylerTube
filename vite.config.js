@@ -175,10 +175,10 @@ function createVideoStreamMiddleware(videosDir) {
     const fileName = path.basename(filePath);
     const dispositionHeaders = isDownload
       ? {
-          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(
-            fileName
-          )}`
-        }
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(
+          fileName
+        )}`
+      }
       : {};
 
     if (range) {

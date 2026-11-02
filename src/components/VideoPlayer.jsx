@@ -85,7 +85,8 @@ export default function VideoPlayer({
   isSidePlayer = false,
   onToggleSidePlayer,
   sidePlayerPrefs = { width: 440, side: "right", vertical: "bottom" },
-  onUpdateSidePlayerPrefs
+  onUpdateSidePlayerPrefs,
+  viewMode = "desktop"
 }) {
   const containerRef = useRef(null);
   const playerRef = useRef(null);
@@ -452,13 +453,21 @@ export default function VideoPlayer({
     playerRef.current?.forward(10);
   };
 
-  const width = clampWidth(sidePlayerPrefs?.width || 440);
+  const isMobileView = viewMode === "mobile";
+  const rawWidth = clampWidth(sidePlayerPrefs?.width || 440);
+  const width = isMobileView ? Math.min(rawWidth, 340) : rawWidth;
   const side = sidePlayerPrefs?.side === "left" ? "left" : "right";
   const vertical = sidePlayerPrefs?.vertical === "top" ? "top" : "bottom";
-  const offsetX =
-    typeof sidePlayerPrefs?.offsetX === "number" ? sidePlayerPrefs.offsetX : 24;
-  const offsetY =
-    typeof sidePlayerPrefs?.offsetY === "number"
+  const offsetX = isMobileView
+    ? 12
+    : typeof sidePlayerPrefs?.offsetX === "number"
+      ? sidePlayerPrefs.offsetX
+      : 24;
+  const offsetY = isMobileView
+    ? vertical === "top"
+      ? 64
+      : 72
+    : typeof sidePlayerPrefs?.offsetY === "number"
       ? sidePlayerPrefs.offsetY
       : vertical === "top"
         ? 76
@@ -746,11 +755,10 @@ export default function VideoPlayer({
                 <span className="watch-resume-text">
                   {savedProgress?.completed
                     ? "✓ Watched"
-                    : `Last watched: ${formatTimestamp(savedTime || resumedBannerTime)}${
-                        savedProgress?.duration > 0
-                          ? ` / ${formatTimestamp(savedProgress.duration)}`
-                          : ""
-                      }`}
+                    : `Last watched: ${formatTimestamp(savedTime || resumedBannerTime)}${savedProgress?.duration > 0
+                      ? ` / ${formatTimestamp(savedProgress.duration)}`
+                      : ""
+                    }`}
                 </span>
                 {savedProgress?.completed && resumedBannerTime > 0 && (
                   <button

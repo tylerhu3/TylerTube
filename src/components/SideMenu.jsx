@@ -5,6 +5,8 @@ export default function SideMenu({
   onClose,
   currentPage,
   onNavigate,
+  viewMode = "desktop",
+  onViewModeChange,
   totalVideosCount = 0,
   historyCount = 0,
   favoritesCount = 0,
@@ -144,8 +146,34 @@ export default function SideMenu({
 
           <div className="side-menu-divider" />
 
+          <div className="side-menu-section">
+            <div className="side-menu-section-title">Display Layout</div>
+            <div className="side-menu-view-toggle">
+              <button
+                type="button"
+                className={`side-menu-view-btn ${viewMode === "desktop" ? "active" : ""}`}
+                onClick={() => onViewModeChange?.("desktop")}
+              >
+                🖥 Desktop
+              </button>
+              <button
+                type="button"
+                className={`side-menu-view-btn ${viewMode === "mobile" ? "active" : ""}`}
+                onClick={() => onViewModeChange?.("mobile")}
+              >
+                📱 Mobile
+              </button>
+            </div>
+          </div>
+
+          <div className="side-menu-divider" />
+
           <div className="side-menu-section side-menu-shortcuts">
             <div className="side-menu-section-title">Shortcuts</div>
+            <div className="side-menu-shortcut-row">
+              <span>Mobile / Desktop View</span>
+              <kbd>M</kbd>
+            </div>
             <div className="side-menu-shortcut-row">
               <span>Theater Mode</span>
               <kbd>T</kbd>

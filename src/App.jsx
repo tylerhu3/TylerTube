@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Navbar from "./components/Navbar";
 import SideMenu from "./components/SideMenu";
 import VideoPlayer from "./components/VideoPlayer";
@@ -12,6 +12,22 @@ const FAVORITES_STORAGE_KEY = "tylertube_favorites";
 const LAST_VIDEO_STORAGE_KEY = "tylertube_last_video_id";
 const THEME_STORAGE_KEY = "tylertube_theme";
 const SIDE_PLAYER_STORAGE_KEY = "tylertube_side_player_prefs";
+const VIEW_MODE_STORAGE_KEY = "tylertube_view_mode";
+
+function detectInitialViewMode() {
+  try {
+    const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+    if (saved === "mobile" || saved === "desktop") {
+      return saved;
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  if (typeof window !== "undefined" && window.innerWidth <= 768) {
+    return "mobile";
+  }
+  return "desktop";
+}
 
 function loadSavedWatchProgress() {
   try {
@@ -81,6 +97,14 @@ export default function App() {
   const [selectedSection, setSelectedSection] = useState("ALL");
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isSidePlayer, setIsSidePlayer] = useState(false);
+  const [viewMode, setViewMode] = useState(() => {
+    const initial = detectInitialViewMode();
+    if (typeof document !== "undefined") {
+      document.documentElement.setAttribute("data-view-mode", initial);
+    }
+    return initial;
+  });
+  const hasManualViewOverrideRef = useRef(false);
   const [sidePlayerPrefs, setSidePlayerPrefs] = useState(() => {
     try {
       const saved = localStorage.getItem(SIDE_PLAYER_STORAGE_KEY);
@@ -180,7 +204,7 @@ export default function App() {
     for (const { progress } of historyItems) {
       const isDone = Boolean(
         progress?.completed ||
-          (progress?.duration > 0 && progress?.time >= progress.duration - 1.5)
+        (progress?.duration > 0 && progress?.time >= progress.duration - 1.5)
       );
       if (isDone) comp++;
       else inProg++;
@@ -227,11 +251,14 @@ export default function App() {
       if (currentPage !== "home" && !isSidePlayer) {
         setCurrentPage("home");
         window.scrollTo({ top: 0, behavior: "smooth" });
-      } else if (!isSidePlayer && (isTheaterMode || window.innerWidth <= 1024)) {
+      } else if (
+        !isSidePlayer &&
+        (isTheaterMode || viewMode === "mobile" || window.innerWidth <= 1024)
+      ) {
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
     },
-    [currentPage, isSidePlayer, isTheaterMode]
+    [currentPage, isSidePlayer, isTheaterMode, viewMode]
   );
 
   const updateSidePlayerPrefs = useCallback((updater) => {
@@ -274,7 +301,7 @@ export default function App() {
           : prevEntry?.duration || 0;
       const isCompleted = Boolean(
         options.completed ||
-          (validDuration > 0 && time >= Math.max(0, validDuration - 1.5))
+        (validDuration > 0 && time >= Math.max(0, validDuration - 1.5))
       );
 
       const isGenuineWatch =
@@ -430,31 +457,82 @@ export default function App() {
     }
   }, [theme]);
 
+  useEffect(() => {
+    document.documentElement.setAttribute("data-view-mode", viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(max-width: 768px)");
+    const handleMediaChange = (e) => {
+      if (!hasManualViewOverrideRef.current) {
+        const nextMode = e.matches ? "mobile" : "desktop";
+        setViewMode(nextMode);
+      }
+    };
+    if (mq.addEventListener) {
+      mq.addEventListener("change", handleMediaChange);
+      return () => mq.removeEventListener("change", handleMediaChange);
+    }
+  }, []);
+
+  const handleViewModeChange = useCallback((nextMode) => {
+    if (nextMode !== "mobile" && nextMode !== "desktop") return;
+    hasManualViewOverrideRef.current = true;
+    setViewMode(nextMode);
+    if (nextMode === "mobile") {
+      setIsTheaterMode(false);
+    }
+    try {
+      localStorage.setItem(VIEW_MODE_STORAGE_KEY, nextMode);
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
+
+  const toggleViewMode = useCallback(() => {
+    setViewMode((prev) => {
+      const next = prev === "mobile" ? "desktop" : "mobile";
+      hasManualViewOverrideRef.current = true;
+      if (next === "mobile") {
+        setIsTheaterMode(false);
+      }
+      try {
+        localStorage.setItem(VIEW_MODE_STORAGE_KEY, next);
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+
   const toggleTheme = useCallback(() => {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }, []);
 
-  // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player when not typing in inputs
+  // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player, 'M' for Mobile/Desktop View when not typing in inputs
   useEffect(() => {
     const handleKeyDown = (e) => {
       const tag = document.activeElement?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
-      if (key === "t" && currentPage === "home") {
+      if (key === "t" && currentPage === "home" && viewMode !== "mobile") {
         toggleTheaterMode();
       } else if (key === "s") {
         toggleSidePlayer();
+      } else if (key === "m") {
+        toggleViewMode();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleTheaterMode, toggleSidePlayer, currentPage]);
+  }, [toggleTheaterMode, toggleSidePlayer, toggleViewMode, currentPage, viewMode]);
 
   const isPlayerHidden = currentPage !== "home" && !isSidePlayer;
 
   return (
-    <>
+    <div className={`app-shell view-mode-${viewMode}`}>
       <Navbar
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -462,6 +540,8 @@ export default function App() {
         onToggleTheater={toggleTheaterMode}
         isSidePlayer={isSidePlayer}
         onToggleSidePlayer={toggleSidePlayer}
+        viewMode={viewMode}
+        onViewModeChange={handleViewModeChange}
         theme={theme}
         onToggleTheme={toggleTheme}
         onToggleMenu={() => setIsMenuOpen((prev) => !prev)}
@@ -474,6 +554,8 @@ export default function App() {
         onClose={() => setIsMenuOpen(false)}
         currentPage={currentPage}
         onNavigate={setCurrentPage}
+        viewMode={viewMode}
+        onViewModeChange={handleViewModeChange}
         totalVideosCount={VIDEO_LIBRARY.length}
         historyCount={historyItems.length}
         favoritesCount={favoriteItems.length}
@@ -482,7 +564,7 @@ export default function App() {
       />
 
       <main
-        className={`container ${
+        className={`container ${viewMode === "mobile" ? "mobile-container" : ""} ${
           currentPage !== "home"
             ? "subpage-mode"
             : `${isTheaterMode ? "theater-mode" : ""} ${
@@ -506,6 +588,7 @@ export default function App() {
           onToggleSidePlayer={toggleSidePlayer}
           sidePlayerPrefs={sidePlayerPrefs}
           onUpdateSidePlayerPrefs={updateSidePlayerPrefs}
+          viewMode={viewMode}
         />
 
         {currentPage === "home" && (
@@ -555,6 +638,72 @@ export default function App() {
           />
         )}
       </main>
-    </>
+
+      {viewMode === "mobile" && (
+        <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+          <button
+            type="button"
+            className={`mobile-nav-item ${currentPage === "home" ? "active" : ""}`}
+            onClick={() => setCurrentPage("home")}
+          >
+            <span className="mobile-nav-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1V9.5z" />
+              </svg>
+            </span>
+            <span className="mobile-nav-label">Home</span>
+          </button>
+
+          <button
+            type="button"
+            className={`mobile-nav-item ${currentPage === "history" ? "active" : ""}`}
+            onClick={() => setCurrentPage("history")}
+          >
+            <span className="mobile-nav-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+                <polyline points="3 3 3 8 8 8" />
+                <polyline points="12 7 12 12 15.5 14" />
+              </svg>
+              {historyItems.length > 0 && (
+                <span className="mobile-nav-badge">{historyItems.length}</span>
+              )}
+            </span>
+            <span className="mobile-nav-label">History</span>
+          </button>
+
+          <button
+            type="button"
+            className={`mobile-nav-item ${currentPage === "favorites" ? "active" : ""}`}
+            onClick={() => setCurrentPage("favorites")}
+          >
+            <span className="mobile-nav-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "favorites" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+              </svg>
+              {favoriteItems.length > 0 && (
+                <span className="mobile-nav-badge">{favoriteItems.length}</span>
+              )}
+            </span>
+            <span className="mobile-nav-label">Favorites</span>
+          </button>
+
+          <button
+            type="button"
+            className={`mobile-nav-item ${isMenuOpen ? "active" : ""}`}
+            onClick={() => setIsMenuOpen((prev) => !prev)}
+          >
+            <span className="mobile-nav-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </span>
+            <span className="mobile-nav-label">Menu</span>
+          </button>
+        </nav>
+      )}
+    </div>
   );
 }
