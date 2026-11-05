@@ -5,7 +5,6 @@ import { generateAllThumbnails } from "../scripts/generate-thumbnails.js";
 import { scanVideosDirectory } from "./catalog.js";
 import { createThumbnailsMiddleware } from "./thumbnails-middleware.js";
 import { createVideoStreamMiddleware } from "./stream-middleware.js";
-import { createLiveAudioMiddleware } from "./live-audio.js";
 import { attachDriveWebSocketServer } from "./drive-ws.js";
 
 export function videoCatalogPlugin() {
@@ -68,7 +67,6 @@ export function videoCatalogPlugin() {
         createThumbnailsMiddleware(thumbnailsDir, videosDir)
       );
       server.middlewares.use(createVideoStreamMiddleware(videosDir));
-      server.middlewares.use(createLiveAudioMiddleware(videosDir));
       attachDriveWebSocketServer(server.httpServer, videosDir);
       server.watcher.add(videosDir);
       const reloadCatalog = (filePath) => {
@@ -90,7 +88,6 @@ export function videoCatalogPlugin() {
         createThumbnailsMiddleware(thumbnailsDir, videosDir)
       );
       server.middlewares.use(createVideoStreamMiddleware(videosDir));
-      server.middlewares.use(createLiveAudioMiddleware(videosDir));
       attachDriveWebSocketServer(server.httpServer, videosDir);
     }
   };

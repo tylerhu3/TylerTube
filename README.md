@@ -16,14 +16,14 @@ TylerTube/
 ├── index.html                  # Vite HTML entry (loads /jsmpeg.min.js globally)
 ├── package.json
 ├── vite.config.js              # Vite config (plugins + build settings only)
-├── nginx.conf                  # Nginx: serves dist/ + public/, proxies /ws & /api to :5173
+├── nginx.conf                  # Nginx: serves dist/ + public/, proxies /ws/mpeg1 to :5180
 ├── CLAUDE.md                   # Notes for AI-assisted development
-├── server/                     # Dev/preview backend, mounted by server/plugin.js
+├── server/                     # Backend: Vite plugin (dev/preview) + standalone Drive server
 │   ├── plugin.js               # Vite plugin: video catalog + middlewares
 │   ├── catalog.js              # Scans public/videos/ into virtual:video-library
 │   ├── stream-middleware.js    # /videos/* byte-range streaming
 │   ├── thumbnails-middleware.js # /thumbnails/* (generated on demand)
-│   ├── live-audio.js           # /api/live-audio
+│   ├── standalone.js           # Production Drive server (npm run server, :5180)
 │   ├── drive-ws.js             # /ws/mpeg1 ffmpeg → MPEG1 WebSocket (Drive mode)
 │   ├── media-files.js          # Safe path resolution, duration probing
 │   ├── shared.js               # Shared constants/helpers
@@ -37,6 +37,7 @@ TylerTube/
 ├── scripts/
 │   ├── generate-thumbnails.js  # Parallel ffmpeg thumbnail generator
 │   ├── generate-icons.py       # Favicon generator
+│   ├── launchd/                # LaunchAgent plist for the Drive server
 │   └── check.mjs               # Static code check (npm run check)
 └── src/
     ├── main.jsx                # React root mount
@@ -122,13 +123,35 @@ nginx -t
 brew services restart nginx
 ```
 
-### 4. Stream on Your Mac & Home Network
+### 4. Run the Drive Server (Tesla Drive mode)
+
+Drive mode streams over a WebSocket (`/ws/mpeg1`) that Nginx proxies to a small Node server on `127.0.0.1:5180`. Vite isn't needed in production.
+
+Run it by hand:
+
+```bash
+npm run server
+```
+
+Or install it as a LaunchAgent so it starts at login and restarts if it crashes:
+
+```bash
+cp scripts/launchd/com.tylertube.drive.plist ~/Library/LaunchAgents/
+```
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tylertube.drive.plist
+```
+
+The plist assumes Homebrew's `/opt/homebrew/bin/node`; if `which node` says otherwise (nvm, Volta), edit `ProgramArguments` before installing. Check it with `curl http://127.0.0.1:5180/healthz` (→ `ok`); logs go to `/tmp/tylertube-drive.log`. After pulling server changes, restart it with `launchctl kickstart -k gui/$(id -u)/com.tylertube.drive`. Set `DRIVE_PORT` to use another port (and update `nginx.conf` to match).
+
+### 5. Stream on Your Mac & Home Network
 
 - **On your Mac:** Open `http://localhost:8080`
 - **On other devices (iPhone, iPad, Apple TV, Smart TV):**
   Run `ipconfig getifaddr en0` to find your Mac's LAN IP, then visit `http://<YOUR_MAC_IP>:8080`.
 
-### 5. Stream Outside Your Home Network (Cloudflare Tunnel)
+### 6. Stream Outside Your Home Network (Cloudflare Tunnel)
 
 To generate a public `https://` link accessible from anywhere (without router port forwarding):
 

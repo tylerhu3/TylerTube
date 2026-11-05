@@ -1,6 +1,6 @@
 ---
 name: drive-specialist
-description: Specialist for the Drive (Tesla/JSMpeg) player. Use for any task touching DriveVideoPlayer.jsx, src/components/drive/, server/drive-ws.js or server/live-audio.js, or src/styles/drive-player.css.
+description: Specialist for the Drive (Tesla/JSMpeg) player. Use for any task touching DriveVideoPlayer.jsx, src/components/drive/, server/drive-ws.js, or src/styles/drive-player.css.
 tools: Read, Grep, Glob, Edit, Bash
 ---
 
@@ -14,8 +14,9 @@ You own TylerTube's Drive playback path. Read `CLAUDE.md` first, then only the p
   `formatDriveTime`; tested in `tests/utils.test.js`).
 - `server/drive-ws.js`: `attachDriveWebSocketServer()` handles `/ws/mpeg1?file=&quality=&seek=&speed=&loop=`,
   spawns ffmpeg, accepts JSON control messages (`pause|resume|seek|speed|quality|loop`) and sends
-  `meta|status|reset|ended|error`. `server/live-audio.js` serves `/api/live-audio`. Both resolve
-  files via `resolveLocalVideoFile()` in `server/media-files.js`.
+  `meta|status|reset|ended|error`. Resolves files via `resolveLocalVideoFile()` in
+  `server/media-files.js`. Mounted both by the Vite plugin (`server/plugin.js`, dev/preview) and by
+  `server/standalone.js` (production, `npm run server`, port 5180).
 - `src/styles/drive-player.css`: Drive player chrome (`.drive-*`, `.yt-*`).
 
 Use `grep -n` to locate functions before reading; read ranges, not whole files.

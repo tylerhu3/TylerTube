@@ -10,12 +10,14 @@ Run on the Mac (macOS, Homebrew Nginx). Stop and report on the first failure.
 2. `npm run check && npm test && npm run build`: all must succeed. Check that `dist/index.html`, `dist/jsmpeg.min.js` and the favicons exist.
 3. If `nginx.conf` changed: `cp nginx.conf /opt/homebrew/etc/nginx/nginx.conf`.
 4. `nginx -t && brew services restart nginx`
-5. Drive mode needs the Vite server: check `lsof -iTCP:5173 -sTCP:LISTEN`. If nothing is
-   listening, tell the user to run `npm run dev` (don't leave it running in the background
-   yourself unless asked).
+5. Drive mode needs the standalone Drive server: `curl -s http://127.0.0.1:5180/healthz` → `ok`.
+   If it fails, check `launchctl print gui/$(id -u)/com.tylertube.drive` and `/tmp/tylertube-drive.log`,
+   and tell the user to install the LaunchAgent (README, "Run the Drive Server") or run `npm run server`
+   (don't leave it running in the background yourself unless asked). If `server/` changed since it
+   started, restart it: `launchctl kickstart -k gui/$(id -u)/com.tylertube.drive`.
 6. Smoke test:
    - `curl -sI http://localhost:8080/ | head -1` → `200`
    - `curl -sI "http://localhost:8080/videos/<some file>" -H "Range: bytes=0-1" | head -1` → `206`
      (pick a file with `ls public/videos | head`; do not recurse into it)
    - `grep -o 'v[0-9.]* (build [^)]*)' dist/assets/*.js | head -1`: report the deployed version.
-7. Report: version, build result, Nginx status, whether Drive mode is available (dev server up).
+7. Report: version, build result, Nginx status, whether Drive mode is available (Drive server up).

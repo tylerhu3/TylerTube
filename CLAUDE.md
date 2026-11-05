@@ -9,13 +9,15 @@ JSMpeg-based "Drive" player, Nginx in production on macOS. User-facing docs: [RE
 Browser ──► Nginx :8080 ──► dist/                (built SPA)
                      ├────► public/videos/       (/videos/*, byte-range MP4)
                      ├────► public/thumbnails/   (/thumbnails/*)
-                     └─proxy─► Vite dev server :5173  (/ws/mpeg1, /api/*)
+                     └─proxy─► Drive server :5180     (/ws/mpeg1; npm run server)
 ```
 
-- **Backend lives in `server/`**, mounted into Vite by `server/plugin.js` (`vite.config.js` is ~20 lines):
+- **Backend lives in `server/`**, mounted into Vite by `server/plugin.js` (`vite.config.js` is ~20 lines),
+  plus `standalone.js` (production Drive server, plain `http` + `drive-ws.js`, no Vite):
   - `catalog.js` → `virtual:video-library`: scans `public/videos/` → `src/data/videos.js` → `VIDEO_LIBRARY`.
-  - Dev/preview middlewares: `thumbnails-middleware.js`, `stream-middleware.js`, `live-audio.js` (`/api/live-audio`).
+  - Dev/preview middlewares: `thumbnails-middleware.js`, `stream-middleware.js`.
   - `drive-ws.js`: `/ws/mpeg1?file=…` spawns ffmpeg → MPEG1 over WebSocket → JSMpeg canvas.
+    Attached to Vite :5173 in dev and to `standalone.js` :5180 (`DRIVE_PORT`) in production.
   - `media-files.js` (`resolveLocalVideoFile`, path-traversal guard), `shared.js`, `build-info.js` (version `define`s).
 - **Standard playback:** `VideoPlayer.jsx` (Plyr on a native `<video>`).
 - **Drive playback:** `VideoPlayer.jsx` renders `DriveVideoPlayer.jsx` when `playerMode === "drive"`.
@@ -27,7 +29,7 @@ Browser ──► Nginx :8080 ──► dist/                (built SPA)
 
 | Path | What |
 |---|---|
-| `server/` | Dev/preview backend (see Architecture). Unit-tested in `tests/server.test.js` |
+| `server/` | Backend (see Architecture). Unit-tested in `tests/server.test.js`, `tests/standalone.test.js` |
 | `src/App.jsx` | All state, localStorage keys, keyboard shortcuts, page switch, mobile bottom nav |
 | `src/lib/storage.js` | Never-throwing localStorage helpers (`readJSON`, `writeJSON`, `writeString`, …) |
 | `src/utils/format.js` | Shared formatting (`formatDuration`) |
@@ -44,6 +46,7 @@ Browser ──► Nginx :8080 ──► dist/                (built SPA)
 | `scripts/check.mjs` | Static check: parse, undefined/unused identifiers, broken imports |
 | `scripts/generate-thumbnails.js` | ffmpeg thumbnail generator (also imported by `server/`) |
 | `scripts/generate-icons.py` | Regenerates favicons in `public/` |
+| `scripts/launchd/` | LaunchAgent plist that keeps `npm run server` running (install steps in README) |
 | `nginx.conf` | Production config (copied to `/opt/homebrew/etc/nginx/`) |
 | `public/videos/`, `public/thumbnails/` | Media, ~51 GB, gitignored. **Never read or list recursively.** |
 | `public/jsmpeg.min.js` | Vendored, loaded globally via `<script>` in `index.html`. Don't read. |
@@ -55,14 +58,16 @@ Use `grep -n "^/\* " src/styles/<file>.css` to find sections.
 ## Commands
 
 ```zsh
-npm run dev          # Vite dev server :5173 (also hosts Drive WS + /api)
+npm run dev          # Vite dev server :5173 (also hosts the Drive WS)
 npm run build        # Build to dist/ (also generates missing thumbnails)
 npm run preview      # Serve dist/ with the same middlewares (:4173)
+npm run server       # Production Drive server :5180 (Nginx proxies /ws/mpeg1 here)
 npm run thumbnails   # Generate missing thumbnails only
 npm run check        # Static check of all JS/JSX (~0.5 s). Run after every edit.
 npm test             # Unit tests (node:test, ~50 ms)
 node --test tests/server.test.js          # Single test file
 nginx -t && brew services restart nginx   # Reload production after build
+launchctl kickstart -k gui/$(id -u)/com.tylertube.drive   # Restart Drive server after server/ changes
 ```
 
 No TypeScript or ESLint. Verify with `npm run check && npm test`, then `npm run build`;
@@ -83,7 +88,9 @@ Requires `ffmpeg`/`ffprobe` on PATH.
 
 ## Gotchas
 
-- **Production Drive mode needs `npm run dev` running**: Nginx proxies `/ws/mpeg1` and `/api/` to :5173.
+- **Production Drive mode needs `npm run server`** (LaunchAgent `com.tylertube.drive`, port 5180):
+  Nginx proxies `/ws/mpeg1` there. It doesn't hot-reload; restart it after editing `server/`.
+  launchd runs it with a fixed `PATH` (set in the plist) so ffmpeg/ffprobe resolve.
 - **Catalog is baked at build time.** After adding videos in production, re-run `npm run build`.
   In dev, the watcher reloads it.
 - `build.copyPublicDir: false`. Nginx serves media from `public/`. Root-level assets that `dist/`
@@ -100,7 +107,6 @@ Requires `ffmpeg`/`ffprobe` on PATH.
   live in `src/styles/mobile.css`; check both modes after UI edits.
 - Theme migration flag `tylertube_theme_migrated_v2` in `App.jsx`: don't remove casually.
 - Nginx serves from the symlink `/Users/Shared/MyStreamingApp` → this repo.
-- `/api/live-audio` is not referenced from `src/` today.
 - `scripts/check.mjs` relies on `@babel/parser`/`@babel/traverse`, installed transitively by
   `@vitejs/plugin-react`.
 

@@ -1,11 +1,12 @@
 // WebSocket /ws/mpeg1?file=&quality=&seek=&speed=&loop=: ffmpeg → MPEG1 for the JSMpeg Drive player.
 // Client side: src/components/DriveVideoPlayer.jsx. Message formats must change together.
+// Returns the WebSocketServer (null without httpServer); terminating its clients kills their ffmpeg.
 import { spawn } from "node:child_process";
 import { WebSocketServer } from "ws";
 import { resolveLocalVideoFile, probeVideoDuration } from "./media-files.js";
 
 export function attachDriveWebSocketServer(httpServer, videosDir) {
-  if (!httpServer) return;
+  if (!httpServer) return null;
 
   const wss = new WebSocketServer({
     noServer: true,
@@ -425,4 +426,6 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
       killActiveFfmpeg();
     });
   });
+
+  return wss;
 }
