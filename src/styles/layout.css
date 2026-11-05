@@ -1,0 +1,51 @@
+/* Layout & Theater Mode */
+.container {
+    max-width: 1640px;
+    margin: 0 auto;
+    padding: 1.25rem 2rem 2rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 410px;
+    gap: 1.5rem;
+    align-items: start;
+    transition: max-width 0.25s ease;
+}
+
+.player-section:not(.floating-player) {
+    position: sticky;
+    top: 76px;
+    min-width: 0;
+}
+
+.container.theater-mode,
+.container.side-player-active {
+    max-width: 1360px;
+    display: flex;
+    flex-direction: column;
+    gap: 2.25rem;
+}
+
+.container.theater-mode {
+    max-width: 100%;
+    padding-left: 0;
+    padding-right: 0;
+    padding-top: 0;
+}
+
+.container.theater-mode .player-section:not(.floating-player) {
+    position: static;
+    width: 100%;
+}
+
+.container.theater-mode .video-wrapper {
+    border-radius: 0;
+    max-height: 82vh;
+}
+
+.container.theater-mode .player-bar,
+.container.theater-mode .gallery-section {
+    max-width: 1360px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 2rem;
+}
+

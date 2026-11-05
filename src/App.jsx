@@ -7,6 +7,7 @@ import HistoryPage from "./components/HistoryPage";
 import FavoritesPage from "./components/FavoritesPage";
 import { VIDEO_LIBRARY } from "./data/videos";
 import { COLOR_THEMES } from "./data/themeColors";
+import { readJSON, writeString, writeJSON, removeKey } from "./lib/storage";
 
 const STORAGE_KEY = "tylertube_watch_progress";
 const FAVORITES_STORAGE_KEY = "tylertube_favorites";
@@ -32,21 +33,11 @@ function detectInitialViewMode() {
 }
 
 function loadSavedWatchProgress() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : {};
-  } catch {
-    return {};
-  }
+  return readJSON(STORAGE_KEY, {});
 }
 
 function loadSavedFavorites() {
-  try {
-    const saved = localStorage.getItem(FAVORITES_STORAGE_KEY);
-    return saved ? JSON.parse(saved) : {};
-  } catch {
-    return {};
-  }
+  return readJSON(FAVORITES_STORAGE_KEY, {});
 }
 
 function getInitialVideoId(initialProgress) {
@@ -128,16 +119,12 @@ export default function App() {
     return initial;
   });
   const hasManualViewOverrideRef = useRef(false);
-  const [sidePlayerPrefs, setSidePlayerPrefs] = useState(() => {
-    try {
-      const saved = localStorage.getItem(SIDE_PLAYER_STORAGE_KEY);
-      return saved
-        ? { width: 420, side: "right", vertical: "bottom", ...JSON.parse(saved) }
-        : { width: 420, side: "right", vertical: "bottom" };
-    } catch {
-      return { width: 420, side: "right", vertical: "bottom" };
-    }
-  });
+  const [sidePlayerPrefs, setSidePlayerPrefs] = useState(() => ({
+    width: 420,
+    side: "right",
+    vertical: "bottom",
+    ...readJSON(SIDE_PLAYER_STORAGE_KEY, {})
+  }));
   const [filterWatchStatus, setFilterWatchStatus] = useState("ALL");
 
   const courses = useMemo(() => {
@@ -243,11 +230,7 @@ export default function App() {
 
   useEffect(() => {
     if (!currentVideo?.id) return;
-    try {
-      localStorage.setItem(LAST_VIDEO_STORAGE_KEY, currentVideo.id);
-    } catch {
-      // Ignore storage errors
-    }
+    writeString(LAST_VIDEO_STORAGE_KEY, currentVideo.id);
   }, [currentVideo?.id]);
 
   const activePlaylist =
@@ -288,11 +271,7 @@ export default function App() {
     setSidePlayerPrefs((prev) => {
       const next =
         typeof updater === "function" ? updater(prev) : { ...prev, ...updater };
-      try {
-        localStorage.setItem(SIDE_PLAYER_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // Ignore storage errors
-      }
+      writeJSON(SIDE_PLAYER_STORAGE_KEY, next);
       return next;
     });
   }, []);
@@ -349,11 +328,7 @@ export default function App() {
         [videoId]: nextEntry
       };
 
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      } catch {
-        // Ignore storage quota errors
-      }
+      writeJSON(STORAGE_KEY, updated);
 
       // Avoid excessive React re-renders during smooth playback unless second changed or forced
       if (
@@ -387,11 +362,7 @@ export default function App() {
           updatedAt: Date.now()
         }
       };
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      } catch {
-        // Ignore storage quota errors
-      }
+      writeJSON(STORAGE_KEY, updated);
       return updated;
     });
   }, []);
@@ -411,11 +382,7 @@ export default function App() {
           updatedAt: 0
         }
       };
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      } catch {
-        // Ignore storage quota errors
-      }
+      writeJSON(STORAGE_KEY, updated);
       return updated;
     });
   }, []);
@@ -435,11 +402,7 @@ export default function App() {
           };
         }
       }
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      } catch {
-        // Ignore storage errors
-      }
+      writeJSON(STORAGE_KEY, updated);
       return updated;
     });
   }, []);
@@ -453,40 +416,24 @@ export default function App() {
       } else {
         next[videoId] = { addedAt: Date.now() };
       }
-      try {
-        localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // Ignore storage quota errors
-      }
+      writeJSON(FAVORITES_STORAGE_KEY, next);
       return next;
     });
   }, []);
 
   const handleClearFavorites = useCallback(() => {
     setFavorites({});
-    try {
-      localStorage.removeItem(FAVORITES_STORAGE_KEY);
-    } catch {
-      // Ignore storage errors
-    }
+    removeKey(FAVORITES_STORAGE_KEY);
   }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, theme);
-    } catch {
-      // Ignore storage errors
-    }
+    writeString(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-color-theme", colorTheme);
-    try {
-      localStorage.setItem(COLOR_THEME_STORAGE_KEY, colorTheme);
-    } catch {
-      // Ignore storage errors
-    }
+    writeString(COLOR_THEME_STORAGE_KEY, colorTheme);
 
     const current =
       COLOR_THEMES.find((c) => c.id === colorTheme) || COLOR_THEMES[0];
@@ -523,11 +470,7 @@ export default function App() {
     if (nextMode === "mobile") {
       setIsTheaterMode(false);
     }
-    try {
-      localStorage.setItem(VIEW_MODE_STORAGE_KEY, nextMode);
-    } catch {
-      // Ignore storage errors
-    }
+    writeString(VIEW_MODE_STORAGE_KEY, nextMode);
   }, []);
 
   const toggleViewMode = useCallback(() => {
@@ -537,11 +480,7 @@ export default function App() {
       if (next === "mobile") {
         setIsTheaterMode(false);
       }
-      try {
-        localStorage.setItem(VIEW_MODE_STORAGE_KEY, next);
-      } catch {
-        // Ignore storage errors
-      }
+      writeString(VIEW_MODE_STORAGE_KEY, next);
       return next;
     });
   }, []);

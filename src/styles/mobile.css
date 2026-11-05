@@ -1,0 +1,340 @@
+/* ============================================================
+   Mobile Ready Layout, View Switcher & Responsive Breakpoints
+   ============================================================ */
+
+/* Mobile Bottom Navigation Bar */
+.mobile-bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100%;
+    max-width: 100%;
+    height: calc(58px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--bg-navbar);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    align-items: center;
+    z-index: 80;
+}
+
+.mobile-nav-item {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.18rem;
+    height: 100%;
+    cursor: pointer;
+    font-size: 0.68rem;
+    font-weight: 500;
+    transition: color 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-nav-item.active {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.mobile-nav-icon {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    font-size: 1.05rem;
+}
+
+.mobile-nav-badge {
+    position: absolute;
+    top: -5px;
+    right: -11px;
+    background: var(--accent);
+    color: #ffffff;
+    font-size: 0.6rem;
+    font-weight: 700;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.mobile-nav-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* When Mobile Mode is active on Desktop screens (> 768px), render a centered Mobile App Shell */
+@media (min-width: 769px) {
+    [data-view-mode="mobile"] body {
+        background: var(--bg-surface);
+    }
+
+    .app-shell.view-mode-mobile {
+        max-width: 480px;
+        margin: 0 auto;
+        min-height: 100vh;
+        background: var(--bg-primary);
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.18);
+        position: relative;
+    }
+
+    .app-shell.view-mode-mobile .mobile-bottom-nav {
+        max-width: 480px;
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+    }
+}
+
+/* Mobile View Mode Styles (applies whenever Mobile mode is selected, on any screen size) */
+[data-view-mode="mobile"] .navbar {
+    padding: 0.5rem 0.75rem;
+}
+
+[data-view-mode="mobile"] .brand h1 {
+    font-size: 1.05rem;
+}
+
+[data-view-mode="mobile"] .nav-page-indicator {
+    display: none;
+}
+
+[data-view-mode="mobile"] .hamburger-btn {
+    width: 36px;
+    height: 36px;
+}
+
+[data-view-mode="mobile"] .header-actions {
+    gap: 0.35rem;
+    flex-wrap: nowrap;
+}
+
+[data-view-mode="mobile"] .view-mode-btn {
+    padding: 0.28rem 0.55rem;
+    font-size: 0.75rem;
+}
+
+[data-view-mode="mobile"] .btn-secondary {
+    padding: 0.4rem 0.62rem;
+    font-size: 0.78rem;
+}
+
+[data-view-mode="mobile"] .container.mobile-container {
+    display: flex;
+    flex-direction: column;
+    max-width: 100%;
+    padding: 0 0 calc(72px + env(safe-area-inset-bottom, 0px));
+    gap: 0.5rem;
+}
+
+[data-view-mode="mobile"] .container.mobile-container.subpage-mode {
+    padding: 0.85rem 0.85rem calc(76px + env(safe-area-inset-bottom, 0px));
+}
+
+[data-view-mode="mobile"] .player-section:not(.floating-player) {
+    position: sticky;
+    top: 53px;
+    z-index: 40;
+    background: var(--bg-primary);
+    width: 100%;
+    border-bottom: 1px solid var(--border);
+}
+
+[data-view-mode="mobile"] .player-section:not(.floating-player) .video-wrapper {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+}
+
+[data-view-mode="mobile"] .player-section:not(.floating-player) .player-bar {
+    padding: 0.65rem 0.85rem 0.75rem;
+    margin-top: 0;
+    border-bottom: none;
+    gap: 0.6rem;
+}
+
+[data-view-mode="mobile"] .video-meta h2 {
+    font-size: 1.02rem;
+    line-height: 1.32;
+}
+
+[data-view-mode="mobile"] .video-meta p {
+    font-size: 0.82rem;
+}
+
+/* Horizontally scrollable touch-friendly pill strip for player controls on Mobile */
+[data-view-mode="mobile"] .player-section:not(.floating-player) .custom-controls {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+    gap: 0.45rem;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+
+[data-view-mode="mobile"] .player-section:not(.floating-player) .custom-controls::-webkit-scrollbar {
+    display: none;
+}
+
+[data-view-mode="mobile"] .player-section:not(.floating-player) .ctrl-btn {
+    flex-shrink: 0;
+    padding: 0.45rem 0.8rem;
+    font-size: 0.8rem;
+    min-height: 36px;
+}
+
+/* Natural page scrolling for Video Library in Mobile Mode (no trapped inner scroll container) */
+[data-view-mode="mobile"] .container:not(.theater-mode):not(.side-player-active) .gallery-section {
+    position: static;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 0.65rem 0.85rem 1rem;
+}
+
+[data-view-mode="mobile"] .container:not(.theater-mode):not(.side-player-active) .video-grid {
+    overflow-y: visible;
+    padding-right: 0;
+    gap: 0.65rem;
+}
+
+[data-view-mode="mobile"] .filter-select {
+    font-size: 16px;
+    padding: 0.48rem 0.7rem;
+}
+
+[data-view-mode="mobile"] .container:not(.theater-mode):not(.side-player-active) .card-thumb {
+    width: 138px;
+}
+
+[data-view-mode="mobile"] .card-fav-btn,
+[data-view-mode="mobile"] .card-download-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 0.92rem;
+}
+
+/* Subpages (History & Favorites) in Mobile Mode */
+[data-view-mode="mobile"] .history-page {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 1.1rem;
+}
+
+[data-view-mode="mobile"] .favorites-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+}
+
+[data-view-mode="mobile"] .history-sidebar,
+[data-view-mode="mobile"] .favorites-hero-panel {
+    position: static;
+    width: 100%;
+}
+
+[data-view-mode="mobile"] .history-search-box input {
+    font-size: 16px;
+}
+
+[data-view-mode="mobile"] .history-card {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.55rem;
+}
+
+[data-view-mode="mobile"] .history-card .history-card-thumb {
+    width: 132px !important;
+}
+
+[data-view-mode="mobile"] .history-card-title {
+    font-size: 0.9rem;
+}
+
+[data-view-mode="mobile"] .favorite-index {
+    display: none;
+}
+
+/* Plyr Mobile Control Bar Refinements */
+[data-view-mode="mobile"] .plyr__controls {
+    flex-wrap: wrap;
+    padding: 8px 10px 6px !important;
+    gap: 2px;
+}
+
+[data-view-mode="mobile"] .plyr__controls .plyr__progress__container {
+    flex: 1 0 100%;
+    order: -1;
+    margin-bottom: 4px;
+}
+
+[data-view-mode="mobile"] .plyr__volume input[type="range"],
+[data-view-mode="mobile"] .plyr__control[data-plyr="pip"],
+[data-view-mode="mobile"] .plyr__control[data-plyr="airplay"],
+[data-view-mode="mobile"] .plyr__control[data-plyr="download"] {
+    display: none !important;
+}
+
+/* Standard Viewport Media Queries when not forcing Desktop 2-column on tiny screens */
+@media (max-width: 1024px) {
+    [data-view-mode="desktop"] .container {
+        grid-template-columns: minmax(0, 1fr) 320px;
+        padding: 1rem 1.25rem 2rem;
+        gap: 1rem;
+    }
+
+    [data-view-mode="desktop"] .history-page {
+        grid-template-columns: minmax(0, 1fr) 260px;
+        gap: 1rem;
+    }
+
+    [data-view-mode="desktop"] .favorites-page {
+        grid-template-columns: 260px minmax(0, 1fr);
+        gap: 1rem;
+    }
+}
+
+@media (max-width: 640px) {
+    [data-view-mode="mobile"] .view-mode-label {
+        font-size: 0.72rem;
+    }
+
+    [data-view-mode="desktop"] .navbar {
+        padding: 0.6rem 0.85rem;
+    }
+
+    [data-view-mode="desktop"] #searchInput {
+        width: 150px;
+    }
+
+    [data-view-mode="desktop"] .container {
+        grid-template-columns: minmax(0, 1fr) 220px;
+        padding: 0.75rem;
+        gap: 0.75rem;
+    }
+
+    [data-view-mode="desktop"] .container:not(.theater-mode):not(.side-player-active) .card-thumb {
+        width: 96px;
+    }
+}
+

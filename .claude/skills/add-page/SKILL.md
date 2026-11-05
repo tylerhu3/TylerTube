@@ -15,10 +15,11 @@ Pages are switched by the `currentPage` string in `src/App.jsx` (no router).
    - add a button to `<nav className="mobile-bottom-nav">` mirroring the existing items.
 3. `src/components/SideMenu.jsx`: add a `side-menu-item` button that calls `onNavigate("<name>")`
    with the `active` class when `currentPage === "<name>"`, like History/Favorites.
-4. `src/styles.css`: add a `/* <Name> Page */` section after the Favorites section, plus any
-   overrides in the "Subpages (History & Favorites) in Mobile Mode" section.
+4. CSS: add a `/* <Name> Page */` section to `src/styles/subpages.css`, plus any overrides in
+   the "Subpages (History & Favorites) in Mobile Mode" section of `src/styles/mobile.css`.
+   Reuse `formatDuration` from `src/utils/format.js` instead of copying helpers.
    Use theme variables (`--accent`, etc.), not hard-coded colors.
 5. Note: when a video is selected while not on `home` and the side player is off, App navigates
    back to `home` (see `handleSelectVideo`). Pass it as `onSelectVideo` if the page lists videos.
-6. Verify: `npm run build`; open the page from the side menu and from the mobile bottom nav,
+6. Verify: `npm run check && npm run build`; open the page from the side menu and from the mobile bottom nav,
    in desktop and mobile view mode, light and dark theme.

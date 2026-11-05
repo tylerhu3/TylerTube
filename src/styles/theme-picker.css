@@ -1,0 +1,167 @@
+/* Color Theme Picker Styles */
+.color-theme-dropdown-wrap {
+    position: relative;
+    display: inline-block;
+}
+
+.color-theme-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.45rem 0.75rem;
+    cursor: pointer;
+}
+
+.color-theme-btn-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.4), 0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s ease;
+}
+
+.color-theme-btn:hover .color-theme-btn-swatch {
+    transform: scale(1.15);
+}
+
+.color-theme-btn-label {
+    font-size: 0.82rem;
+    font-weight: 500;
+}
+
+.color-theme-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    padding: 6px;
+    min-width: 165px;
+    z-index: 1000;
+    backdrop-filter: blur(8px);
+    animation: fadeInDown 0.15s ease;
+}
+
+@keyframes fadeInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.color-theme-dropdown-title {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    padding: 4px 8px 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+}
+
+.color-theme-palette-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.color-palette-btn {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-main);
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    text-align: left;
+}
+
+.color-palette-btn:hover {
+    background: var(--bg-surface-hover);
+}
+
+.color-palette-btn.active {
+    font-weight: 600;
+    background: var(--bg-surface);
+}
+
+.color-swatch-circle {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.color-swatch-name {
+    flex: 1;
+    font-size: 0.8rem;
+}
+
+.color-check-icon {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.85rem;
+}
+
+/* Side Menu Color Section */
+.side-menu-color-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(75px, 1fr));
+    gap: 6px;
+    padding: 4px 0;
+}
+
+.side-menu-color-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-main);
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.side-menu-color-btn:hover {
+    background: var(--bg-surface-hover);
+    border-color: var(--accent);
+}
+
+.side-menu-color-btn.active {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.side-menu-color-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.side-menu-color-text {
+    font-size: 0.76rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+

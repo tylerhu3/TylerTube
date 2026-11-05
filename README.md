@@ -5,7 +5,7 @@ A self-hosted video streaming web application built with **React**, **Vite**, **
 ## Features
 
 - **React Component Architecture:** Modular `<Navbar />`, `<SideMenu />`, `<VideoPlayer />`, `<DriveVideoPlayer />`, `<VideoGrid />`, `<HistoryPage />` and `<FavoritesPage />` components with automatic watch-progress persistence, course/section folder filters, and visual progress bars on video cards.
-- **Automatic Subdirectory, Subtitle & Thumbnail Discovery:** Custom Vite plugin (`videoCatalogPlugin`) recursively scans `public/videos/` (and any nested course/section folders), naturally sorts numbered lessons, URL-encodes special characters (`#`, `&`, spaces), automatically pairs matching `.srt`/`.vtt` subtitle files, and generates/serves `.jpg` video thumbnails in `public/thumbnails/` via `ffmpeg`.
+- **Automatic Subdirectory, Subtitle & Thumbnail Discovery:** Custom Vite plugin (`videoCatalogPlugin` in `server/plugin.js`) recursively scans `public/videos/` (and any nested course/section folders), naturally sorts numbered lessons, URL-encodes special characters (`#`, `&`, spaces), automatically pairs matching `.srt`/`.vtt` subtitle files, and generates/serves `.jpg` video thumbnails in `public/thumbnails/` via `ffmpeg`.
 - **Safe Plyr.io React Integration:** Imperative `<video>` mounting via React `useRef` so Plyr's DOM wrapper never conflicts with React re-renders.
 - **Zero-Copy Video Build Pipeline:** Vite builds the React UI into `dist/` (`copyPublicDir: false`) while Nginx serves `/videos/` directly from `public/videos/`, avoiding duplicating multi-gigabyte video files during builds.
 
@@ -15,10 +15,20 @@ A self-hosted video streaming web application built with **React**, **Vite**, **
 TylerTube/
 ├── index.html                  # Vite HTML entry (loads /jsmpeg.min.js globally)
 ├── package.json
-├── vite.config.js              # Vite config + backend plugin: video catalog, streaming,
-│                               #   thumbnails, Drive-mode WebSocket/ffmpeg server
+├── vite.config.js              # Vite config (plugins + build settings only)
 ├── nginx.conf                  # Nginx: serves dist/ + public/, proxies /ws & /api to :5173
 ├── CLAUDE.md                   # Notes for AI-assisted development
+├── server/                     # Dev/preview backend, mounted by server/plugin.js
+│   ├── plugin.js               # Vite plugin: video catalog + middlewares
+│   ├── catalog.js              # Scans public/videos/ into virtual:video-library
+│   ├── stream-middleware.js    # /videos/* byte-range streaming
+│   ├── thumbnails-middleware.js # /thumbnails/* (generated on demand)
+│   ├── live-audio.js           # /api/live-audio
+│   ├── drive-ws.js             # /ws/mpeg1 ffmpeg → MPEG1 WebSocket (Drive mode)
+│   ├── media-files.js          # Safe path resolution, duration probing
+│   ├── shared.js               # Shared constants/helpers
+│   └── build-info.js           # Version/build stamps
+├── tests/                      # node:test unit tests (npm test)
 ├── public/
 │   ├── jsmpeg.min.js           # Vendored JSMpeg (Drive mode)
 │   ├── favicon*, site.webmanifest
@@ -26,12 +36,15 @@ TylerTube/
 │   └── videos/                 # Raw video files & subtitles (gitignored)
 ├── scripts/
 │   ├── generate-thumbnails.js  # Parallel ffmpeg thumbnail generator
-│   └── generate-icons.py       # Favicon generator
+│   ├── generate-icons.py       # Favicon generator
+│   └── check.mjs               # Static code check (npm run check)
 └── src/
     ├── main.jsx                # React root mount
-    ├── App.jsx                 # All app state, localStorage, page switching
+    ├── App.jsx                 # All app state, page switching
     ├── version.js              # Build version/time injected by Vite
-    ├── styles.css              # All styles (themes, layout, players, mobile)
+    ├── lib/storage.js          # Safe localStorage helpers
+    ├── utils/format.js         # Formatting helpers
+    ├── styles/                 # Global CSS split by area (index.css imports in order)
     ├── data/
     │   ├── videos.js           # Video catalog (from virtual:video-library)
     │   └── themeColors.js      # Accent color themes
@@ -41,6 +54,7 @@ TylerTube/
         ├── VideoGrid.jsx       # Library grid with watch-progress bars
         ├── VideoPlayer.jsx     # Plyr player; switches to Drive player
         ├── DriveVideoPlayer.jsx # JSMpeg canvas player for Tesla Drive mode
+        ├── drive/              # Drive player: JSMpeg patch, settings menu, helpers
         ├── HistoryPage.jsx     # Watch history
         └── FavoritesPage.jsx   # Favorites
 ```

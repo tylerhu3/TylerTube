@@ -1,0 +1,232 @@
+/* YouTube-Style Left Hamburger Side Menu Drawer */
+.side-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 110;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s ease;
+}
+
+.side-menu-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.side-menu-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 260px;
+    max-width: 82vw;
+    background: var(--bg-card);
+    border-right: 1px solid var(--border);
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(-100%);
+    transition: transform 0.24s cubic-bezier(0.2, 0, 0, 1);
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.25);
+}
+
+.side-menu-drawer.open {
+    transform: translateX(0);
+}
+
+.side-menu-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    min-height: 61px;
+}
+
+.side-menu-nav {
+    padding: 0.75rem;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.side-menu-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.side-menu-section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    padding: 0.35rem 0.75rem 0.25rem;
+}
+
+.side-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 1.1rem;
+    width: 100%;
+    padding: 0.65rem 0.85rem;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-main);
+    font-size: 0.92rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.side-menu-item:hover {
+    background: var(--bg-surface);
+}
+
+.side-menu-item.active {
+    background: var(--bg-surface);
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.side-menu-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+    flex-shrink: 0;
+}
+
+.side-menu-label {
+    flex: 1;
+}
+
+.side-menu-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: var(--bg-surface-hover);
+    color: var(--text-muted);
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    font-variant-numeric: tabular-nums;
+}
+
+.side-menu-item.active .side-menu-badge {
+    background: var(--accent);
+    color: #fff;
+}
+
+.side-menu-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 0.35rem 0.25rem;
+}
+
+.side-menu-stats,
+.side-menu-shortcuts {
+    padding: 0.2rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.side-menu-stat-row,
+.side-menu-shortcut-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.side-menu-stat-row strong {
+    color: var(--text-main);
+    font-variant-numeric: tabular-nums;
+}
+
+.side-menu-shortcut-row kbd {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0.1rem 0.45rem;
+    font-size: 0.74rem;
+    font-family: inherit;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.side-menu-footer {
+    padding: 0.85rem 1rem 1.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.side-menu-version-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.75rem;
+}
+
+.side-menu-version-tag {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.side-menu-version-val {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.72rem;
+    color: var(--text-main);
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    padding: 2px 7px;
+    border-radius: 5px;
+    letter-spacing: 0.02em;
+}
+
+.side-menu-build-time {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-style: italic;
+    opacity: 0.85;
+}
+
+.side-menu-view-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+    padding: 0.25rem 0.75rem;
+}
+
+.side-menu-view-btn {
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-main);
+    border-radius: 8px;
+    padding: 0.48rem 0.5rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.side-menu-view-btn:hover {
+    background: var(--bg-surface-hover);
+}
+
+.side-menu-view-btn.active {
+    background: var(--active-btn-bg);
+    border-color: var(--active-btn-bg);
+    color: var(--active-btn-text);
+}
+

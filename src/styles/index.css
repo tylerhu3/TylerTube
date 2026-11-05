@@ -1,0 +1,11 @@
+/* Global styles, split by area. Order matters (cascade): keep this order. */
+@import "./theme.css"; /* Light/dark variables + accent color themes */
+@import "./navbar.css"; /* Top navbar + mobile/desktop view switcher */
+@import "./layout.css"; /* Page layout + theater mode */
+@import "./player.css"; /* Standard player area, floating side player, resize handles */
+@import "./library.css"; /* Video grid + side library list */
+@import "./side-menu.css"; /* Hamburger side menu drawer */
+@import "./subpages.css"; /* History & Favorites pages, empty state */
+@import "./mobile.css"; /* Mobile bottom nav, mobile view mode, responsive breakpoints */
+@import "./drive-player.css"; /* Drive (JSMpeg) player chrome: .drive-* / .yt-* */
+@import "./theme-picker.css"; /* Color theme picker (navbar + side menu) */

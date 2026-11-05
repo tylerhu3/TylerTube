@@ -7,7 +7,7 @@ disable-model-invocation: true
 Run on the Mac (macOS, Homebrew Nginx). Stop and report on the first failure.
 
 1. `git status --short`: tell the user if there are uncommitted changes being deployed.
-2. `npm run build`: must succeed. Check that `dist/index.html`, `dist/jsmpeg.min.js` and the favicons exist.
+2. `npm run check && npm test && npm run build`: all must succeed. Check that `dist/index.html`, `dist/jsmpeg.min.js` and the favicons exist.
 3. If `nginx.conf` changed: `cp nginx.conf /opt/homebrew/etc/nginx/nginx.conf`.
 4. `nginx -t && brew services restart nginx`
 5. Drive mode needs the Vite server: check `lsof -iTCP:5173 -sTCP:LISTEN`. If nothing is
