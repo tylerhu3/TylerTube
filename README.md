@@ -4,7 +4,7 @@ A self-hosted video streaming web application built with **React**, **Vite**, **
 
 ## Features
 
-- **React Component Architecture:** Modular `<Navbar />`, `<VideoPlayer />`, and `<VideoGrid />` components with automatic watch-progress persistence, course/section folder filters, and visual progress bars on video cards.
+- **React Component Architecture:** Modular `<Navbar />`, `<SideMenu />`, `<VideoPlayer />`, `<DriveVideoPlayer />`, `<VideoGrid />`, `<HistoryPage />` and `<FavoritesPage />` components with automatic watch-progress persistence, course/section folder filters, and visual progress bars on video cards.
 - **Automatic Subdirectory, Subtitle & Thumbnail Discovery:** Custom Vite plugin (`videoCatalogPlugin`) recursively scans `public/videos/` (and any nested course/section folders), naturally sorts numbered lessons, URL-encodes special characters (`#`, `&`, spaces), automatically pairs matching `.srt`/`.vtt` subtitle files, and generates/serves `.jpg` video thumbnails in `public/thumbnails/` via `ffmpeg`.
 - **Safe Plyr.io React Integration:** Imperative `<video>` mounting via React `useRef` so Plyr's DOM wrapper never conflicts with React re-renders.
 - **Zero-Copy Video Build Pipeline:** Vite builds the React UI into `dist/` (`copyPublicDir: false`) while Nginx serves `/videos/` directly from `public/videos/`, avoiding duplicating multi-gigabyte video files during builds.
@@ -13,26 +13,36 @@ A self-hosted video streaming web application built with **React**, **Vite**, **
 
 ```text
 TylerTube/
-├── index.html                  # Vite HTML entry point
-├── package.json                # React, Plyr, and Vite dependencies
-├── vite.config.js              # Vite configuration
-├── nginx.conf                  # Nginx config serving dist/ and public/videos/
-├── .gitignore                  # Ignores node_modules, dist, and raw videos
+├── index.html                  # Vite HTML entry (loads /jsmpeg.min.js globally)
+├── package.json
+├── vite.config.js              # Vite config + backend plugin: video catalog, streaming,
+│                               #   thumbnails, Drive-mode WebSocket/ffmpeg server
+├── nginx.conf                  # Nginx: serves dist/ + public/, proxies /ws & /api to :5173
+├── CLAUDE.md                   # Notes for AI-assisted development
 ├── public/
-│   ├── thumbnails/             # Auto-generated & custom poster images (.jpg, .png, .webp)
-│   └── videos/                 # Raw .mp4/.webm/.mov/.m4v video files & subtitles
+│   ├── jsmpeg.min.js           # Vendored JSMpeg (Drive mode)
+│   ├── favicon*, site.webmanifest
+│   ├── thumbnails/             # Auto-generated & custom poster images
+│   └── videos/                 # Raw video files & subtitles (gitignored)
 ├── scripts/
-│   └── generate-thumbnails.js  # Parallel ffmpeg thumbnail generator
+│   ├── generate-thumbnails.js  # Parallel ffmpeg thumbnail generator
+│   └── generate-icons.py       # Favicon generator
 └── src/
     ├── main.jsx                # React root mount
-    ├── App.jsx                 # Main state (active video, search, watch progress, theater mode)
-    ├── styles.css              # Dark theme & responsive gallery styles
+    ├── App.jsx                 # All app state, localStorage, page switching
+    ├── version.js              # Build version/time injected by Vite
+    ├── styles.css              # All styles (themes, layout, players, mobile)
     ├── data/
-    │   └── videos.js           # Video catalog metadata
+    │   ├── videos.js           # Video catalog (from virtual:video-library)
+    │   └── themeColors.js      # Accent color themes
     └── components/
-        ├── Navbar.jsx          # Search input & Theater Mode toggle
-        ├── VideoPlayer.jsx     # Ref-isolated Plyr.io player & custom transport controls
-        └── VideoGrid.jsx       # Responsive gallery grid with watch-progress bars
+        ├── Navbar.jsx          # Search, theater/side-player/drive/theme toggles
+        ├── SideMenu.jsx        # Hamburger drawer: navigation, color themes, version
+        ├── VideoGrid.jsx       # Library grid with watch-progress bars
+        ├── VideoPlayer.jsx     # Plyr player; switches to Drive player
+        ├── DriveVideoPlayer.jsx # JSMpeg canvas player for Tesla Drive mode
+        ├── HistoryPage.jsx     # Watch history
+        └── FavoritesPage.jsx   # Favorites
 ```
 
 ## Adding Videos & Playlists

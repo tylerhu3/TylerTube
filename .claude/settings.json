@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./public/videos/**)",
+      "Read(./public/thumbnails/**)",
+      "Read(./dist/**)",
+      "Read(./node_modules/**)",
+      "Read(./public/jsmpeg.min.js)",
+      "Read(./package-lock.json)"
+    ]
+  }
+}

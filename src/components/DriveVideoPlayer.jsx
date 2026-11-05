@@ -573,7 +573,6 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
   const bufferTargetRef = useRef(2.0);
   const isBufferingRef = useRef(true);
 
-  const [useTestVideo, setUseTestVideo] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
   const [isBuffering, setIsBuffering] = useState(true);
@@ -612,13 +611,9 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
     initialSavedTimeRef.current = savedTime;
   }, [onTimeUpdate, onEnded, video?.id, savedTime]);
 
-  const targetFile = useTestVideo
-    ? "testVideo.mp4"
-    : video?.src || "testVideo.mp4";
+  const targetFile = video?.src || "";
 
-  const displayChannelName = useTestVideo
-    ? "testVideo.mp4"
-    : video?.title || "testVideo.mp4";
+  const displayChannelName = video?.title || "";
 
   const sendWsCommand = useCallback((payload) => {
     const p = playerRef.current;
@@ -733,13 +728,13 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
       showControlsTemporarily();
       sendWsCommand({ type: "seek", time: clamped });
 
-      if (!useTestVideo && videoIdRef.current && onTimeUpdateRef.current) {
+      if (videoIdRef.current && onTimeUpdateRef.current) {
         onTimeUpdateRef.current(videoIdRef.current, clamped, dur, {
           force: true
         });
       }
     },
-    [sendWsCommand, showControlsTemporarily, useTestVideo]
+    [sendWsCommand, showControlsTemporarily]
   );
 
   const skipBy = useCallback(
@@ -1014,10 +1009,10 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
     };
   }, [tryUnlockAudio]);
 
-  // Main JSMpeg stream lifecycle when video / testVideo mode / visibility changes
+  // Main JSMpeg stream lifecycle when video / visibility changes
   useEffect(() => {
     const host = canvasHostRef.current;
-    if (!host || isHidden) {
+    if (!host || isHidden || !targetFile) {
       if (playerRef.current) {
         try {
           playerRef.current.destroy();
@@ -1059,7 +1054,7 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
     host.appendChild(nc);
 
     const startSeek =
-      !useTestVideo && Number(initialSavedTimeRef.current) > 0
+      Number(initialSavedTimeRef.current) > 0
         ? Number(initialSavedTimeRef.current)
         : 0;
 
@@ -1180,11 +1175,7 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
           }
           setIsEnded(true);
           setIsPaused(true);
-          if (
-            !useTestVideo &&
-            videoIdRef.current &&
-            onTimeUpdateRef.current
-          ) {
+          if (videoIdRef.current && onTimeUpdateRef.current) {
             onTimeUpdateRef.current(
               videoIdRef.current,
               mediaDurationRef.current,
@@ -1192,7 +1183,7 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
               { force: true, completed: true }
             );
           }
-          if (!useTestVideo && onEndedRef.current) {
+          if (onEndedRef.current) {
             onEndedRef.current();
           }
         } else if (msg.message) {
@@ -1235,7 +1226,6 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
           // Report progress back to TylerTube once per second
           const wholeSec = Math.floor(clamped);
           if (
-            !useTestVideo &&
             wholeSec > 0 &&
             wholeSec !== lastReportedSecond &&
             videoIdRef.current &&
@@ -1969,22 +1959,6 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
                 +0.1s
               </button>
             </div>
-
-            {/* Quick toggle for testVideo.mp4 vs selected library video */}
-            <button
-              type="button"
-              className={`yt-pill-btn yt-test-btn ${
-                useTestVideo ? "active" : ""
-              }`}
-              onClick={() => setUseTestVideo((prev) => !prev)}
-              title={
-                useTestVideo
-                  ? "Switch back to selected TylerTube library video"
-                  : "Stream tesla-video-drive testVideo.mp4"
-              }
-            >
-              {useTestVideo ? "▶ Library" : "▶ testVideo.mp4"}
-            </button>
 
             {/* Settings (Gear) */}
             <button

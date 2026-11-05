@@ -385,7 +385,6 @@ function scanVideosDirectory(videosRoot, thumbnailsRoot) {
 }
 
 function resolveLocalVideoFile(rawParam, videosDir) {
-  const teslaPublicDir = path.resolve(process.cwd(), "tesla-video-drive/public");
   const publicDir = path.resolve(process.cwd(), "public");
 
   if (rawParam) {
@@ -415,26 +414,20 @@ function resolveLocalVideoFile(rawParam, videosDir) {
       // Ignore decode errors
     }
 
-    // 2. Check by basename inside tesla-video-drive/public/ or public/ (e.g. testVideo.mp4)
+    // 2. Check by basename inside public/ or public/videos/
     const baseName = path.basename(cleanParam);
     const nameCandidates = [
       baseName,
       baseName.toLowerCase().endsWith(".mp4") ? baseName : `${baseName}.mp4`
     ];
     for (const candidateName of nameCandidates) {
-      for (const dir of [teslaPublicDir, publicDir, videosDir]) {
+      for (const dir of [publicDir, videosDir]) {
         const full = path.join(dir, candidateName);
         if (fs.existsSync(full) && fs.statSync(full).isFile()) {
           return full;
         }
       }
     }
-  }
-
-  // Fallback to tesla-video-drive/public/testVideo.mp4 if available
-  const defaultTestVideo = path.join(teslaPublicDir, "testVideo.mp4");
-  if (fs.existsSync(defaultTestVideo) && fs.statSync(defaultTestVideo).isFile()) {
-    return defaultTestVideo;
   }
 
   return null;
@@ -478,7 +471,7 @@ function createLiveAudioMiddleware(videosDir) {
 
     const params = new URLSearchParams(rawQuery);
     const rawTarget =
-      params.get("file") || params.get("channel") || "testVideo.mp4";
+      params.get("file") || params.get("channel") || "";
     const startParam = parseFloat(params.get("start") || "0");
     const startTime =
       Number.isFinite(startParam) && startParam > 0 ? startParam : 0;
@@ -584,7 +577,7 @@ function attachDriveWebSocketServer(httpServer, videosDir) {
       params.get("file") ||
       params.get("channel") ||
       params.get("url") ||
-      "testVideo.mp4";
+      "";
     const initialQuality = parseInt(params.get("quality") || "720", 10) || 720;
     const initialSeek =
       parseFloat(params.get("seek") || params.get("start") || "0") || 0;

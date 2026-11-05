@@ -1,0 +1,3 @@
+# Vendored/generated files: keep out of diffs (saves tokens in `git diff`)
+public/jsmpeg.min.js -diff linguist-vendored
+package-lock.json   -diff linguist-generated
