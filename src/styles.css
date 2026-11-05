@@ -8,16 +8,16 @@
     --bg-input: #ffffff;
     --text-main: #0f0f0f;
     --text-muted: #606060;
-    --accent: #ff0000;
-    --accent-hover: #cc0000;
-    --accent-glow: rgba(255, 0, 0, 0.12);
-    --folder-color: #065fd4;
+    --accent: #0284c7;
+    --accent-hover: #0369a1;
+    --accent-glow: rgba(2, 132, 199, 0.12);
+    --folder-color: #0284c7;
     --border: #e5e5e5;
     --input-border: #cccccc;
     --input-focus: #1c62b9;
     --active-btn-bg: #0f0f0f;
     --active-btn-text: #ffffff;
-    --active-card-ring: rgba(255, 0, 0, 0.28);
+    --active-card-ring: rgba(2, 132, 199, 0.28);
     --video-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
     --thumb-bg: linear-gradient(135deg, #f2f2f2, #e5e5e5);
     --plyr-color-main: var(--accent);
@@ -33,16 +33,16 @@
     --bg-input: #121212;
     --text-main: #f1f1f1;
     --text-muted: #aaaaaa;
-    --accent: #ff0033;
-    --accent-hover: #ff3355;
-    --accent-glow: rgba(255, 0, 51, 0.18);
-    --folder-color: #3ea6ff;
+    --accent: #38bdf8;
+    --accent-hover: #7dd3fc;
+    --accent-glow: rgba(56, 189, 248, 0.18);
+    --folder-color: #38bdf8;
     --border: rgba(255, 255, 255, 0.12);
     --input-border: #303030;
     --input-focus: #1c62b9;
     --active-btn-bg: #f1f1f1;
     --active-btn-text: #0f0f0f;
-    --active-card-ring: rgba(255, 0, 51, 0.35);
+    --active-card-ring: rgba(56, 189, 248, 0.35);
     --video-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
     --thumb-bg: linear-gradient(135deg, #272727, #181818);
     --plyr-color-main: var(--accent);
@@ -50,6 +50,21 @@
 }
 
 /* Color Themes */
+[data-color-theme="lightblue"],
+[data-color-theme="light-blue"] {
+    --accent: #0284c7;
+    --accent-hover: #0369a1;
+    --accent-glow: rgba(2, 132, 199, 0.12);
+    --active-card-ring: rgba(2, 132, 199, 0.28);
+}
+[data-theme="dark"][data-color-theme="lightblue"],
+[data-theme="dark"][data-color-theme="light-blue"] {
+    --accent: #38bdf8;
+    --accent-hover: #7dd3fc;
+    --accent-glow: rgba(56, 189, 248, 0.18);
+    --active-card-ring: rgba(56, 189, 248, 0.35);
+}
+
 [data-color-theme="red"] {
     --accent: #ff0000;
     --accent-hover: #cc0000;
@@ -129,10 +144,10 @@
 }
 
 [data-color-theme="cyan"] {
-    --accent: #0284c7;
-    --accent-hover: #0369a1;
-    --accent-glow: rgba(2, 132, 199, 0.12);
-    --active-card-ring: rgba(2, 132, 199, 0.28);
+    --accent: #0891b2;
+    --accent-hover: #0e7490;
+    --accent-glow: rgba(8, 145, 178, 0.12);
+    --active-card-ring: rgba(8, 145, 178, 0.28);
 }
 [data-theme="dark"][data-color-theme="cyan"] {
     --accent: #06b6d4;
@@ -1340,6 +1355,46 @@ body {
     font-family: inherit;
     font-weight: 600;
     color: var(--text-main);
+}
+
+.side-menu-footer {
+    padding: 0.85rem 1rem 1.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.side-menu-version-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.75rem;
+}
+
+.side-menu-version-tag {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.side-menu-version-val {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.72rem;
+    color: var(--text-main);
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    padding: 2px 7px;
+    border-radius: 5px;
+    letter-spacing: 0.02em;
+}
+
+.side-menu-build-time {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-style: italic;
+    opacity: 0.85;
 }
 
 .side-menu-view-toggle {
@@ -2914,6 +2969,20 @@ body {
 
 .yt-switch.on::after {
     transform: translateX(14px);
+}
+
+.yt-menu-version {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 12px 4px 12px;
+    margin-top: 4px;
+    font-size: 0.66rem;
+    color: rgba(255, 255, 255, 0.45);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
 }
 
 .drive-switch-btn.active,

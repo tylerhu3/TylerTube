@@ -87,12 +87,22 @@ export default function App() {
   });
   const [colorTheme, setColorTheme] = useState(() => {
     try {
-      const saved = localStorage.getItem(COLOR_THEME_STORAGE_KEY) || "red";
+      const migrated = localStorage.getItem("tylertube_theme_migrated_v2");
+      if (!migrated) {
+        localStorage.setItem("tylertube_theme_migrated_v2", "true");
+        const old = localStorage.getItem(COLOR_THEME_STORAGE_KEY);
+        if (!old || old === "red") {
+          localStorage.setItem(COLOR_THEME_STORAGE_KEY, "lightblue");
+          document.documentElement.setAttribute("data-color-theme", "lightblue");
+          return "lightblue";
+        }
+      }
+      const saved = localStorage.getItem(COLOR_THEME_STORAGE_KEY) || "lightblue";
       document.documentElement.setAttribute("data-color-theme", saved);
       return saved;
     } catch {
-      document.documentElement.setAttribute("data-color-theme", "red");
-      return "red";
+      document.documentElement.setAttribute("data-color-theme", "lightblue");
+      return "lightblue";
     }
   });
   const [watchProgress, setWatchProgress] = useState(() =>
@@ -478,15 +488,9 @@ export default function App() {
       // Ignore storage errors
     }
 
-    // Dynamically synchronize website favicon & mobile theme-color with selected color theme
     const current =
       COLOR_THEMES.find((c) => c.id === colorTheme) || COLOR_THEMES[0];
     const hex = theme === "dark" ? current.darkColor : current.color;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="ttGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="${hex}"/><stop offset="100%" stop-color="${hex}"/></linearGradient></defs><rect x="2" y="6" width="28" height="20" rx="5.5" fill="${hex}"/><polygon points="13.2,10.6 21.2,16 13.2,21.4" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="0.8" stroke-linejoin="round"/></svg>`;
-    const link = document.querySelector("link[type='image/svg+xml']");
-    if (link) {
-      link.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
-    }
     const metaTheme = document.querySelector("meta[name='theme-color']");
     if (metaTheme) {
       metaTheme.setAttribute("content", hex);
@@ -602,6 +606,7 @@ export default function App() {
         onNavigate={setCurrentPage}
         viewMode={viewMode}
         onViewModeChange={handleViewModeChange}
+        theme={theme}
         colorTheme={colorTheme}
         onColorThemeChange={setColorTheme}
         totalVideosCount={VIDEO_LIBRARY.length}

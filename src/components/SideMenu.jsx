@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { COLOR_THEMES } from "../data/themeColors";
+import { APP_VERSION, BUILD_TIME } from "../version";
 
 export default function SideMenu({
   isOpen,
@@ -8,7 +9,8 @@ export default function SideMenu({
   onNavigate,
   viewMode = "desktop",
   onViewModeChange,
-  colorTheme = "red",
+  theme = "light",
+  colorTheme = "lightblue",
   onColorThemeChange,
   totalVideosCount = 0,
   historyCount = 0,
@@ -165,7 +167,10 @@ export default function SideMenu({
                 >
                   <span
                     className="side-menu-color-dot"
-                    style={{ backgroundColor: c.color }}
+                    style={{
+                      backgroundColor:
+                        theme === "dark" ? c.darkColor : c.color,
+                    }}
                   />
                   <span className="side-menu-color-text">{c.name}</span>
                 </button>
@@ -211,6 +216,20 @@ export default function SideMenu({
               <span>Side Player</span>
               <kbd>S</kbd>
             </div>
+          </div>
+
+          <div className="side-menu-divider" />
+
+          <div className="side-menu-footer">
+            <div className="side-menu-version-row">
+              <span className="side-menu-version-tag">Version</span>
+              <span className="side-menu-version-val" title={APP_VERSION}>
+                {APP_VERSION}
+              </span>
+            </div>
+            {BUILD_TIME && (
+              <div className="side-menu-build-time">Built {BUILD_TIME}</div>
+            )}
           </div>
         </nav>
       </aside>

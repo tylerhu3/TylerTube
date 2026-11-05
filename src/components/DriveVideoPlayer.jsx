@@ -6,6 +6,7 @@ import React, {
   forwardRef,
   useImperativeHandle
 } from "react";
+import { APP_VERSION } from "../version";
 
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const QUALITY_OPTIONS = [360, 480, 720, 1080];
@@ -1314,7 +1315,8 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
               mediaDurationRef.current > 0
                 ? " / " + formatDriveTime(mediaDurationRef.current)
                 : ""
-            }`
+            }`,
+            `Version: ${APP_VERSION}`
           ]);
         }
       }
@@ -1765,6 +1767,11 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
         >
           <span>Stats for nerds</span>
           <div className={`yt-switch ${statsOpen ? "on" : ""}`} />
+        </div>
+
+        <div className="yt-menu-version">
+          <span>TylerTube</span>
+          <span>{APP_VERSION}</span>
         </div>
       </div>
 

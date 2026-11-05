@@ -14,7 +14,7 @@ export default function Navbar({
   onViewModeChange,
   theme = "light",
   onToggleTheme,
-  colorTheme = "red",
+  colorTheme = "lightblue",
   onColorThemeChange,
   onToggleMenu,
   currentPage = "home",
@@ -247,7 +247,12 @@ export default function Navbar({
             >
               <span
                 className="color-theme-btn-swatch"
-                style={{ backgroundColor: activeColorMeta.color }}
+                style={{
+                  backgroundColor:
+                    theme === "dark"
+                      ? activeColorMeta.darkColor
+                      : activeColorMeta.color,
+                }}
               />
               {!isMobileMode && (
                 <span className="color-theme-btn-label">Color</span>
@@ -274,7 +279,10 @@ export default function Navbar({
                     >
                       <span
                         className="color-swatch-circle"
-                        style={{ backgroundColor: c.color }}
+                        style={{
+                          backgroundColor:
+                            theme === "dark" ? c.darkColor : c.color,
+                        }}
                       />
                       <span className="color-swatch-name">{c.name}</span>
                       {colorTheme === c.id && (

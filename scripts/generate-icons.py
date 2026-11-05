@@ -85,11 +85,11 @@ def render_favicon(size):
         total_alpha = alpha_red + alpha_white
         if total_alpha <= 0:
             return (0, 0, 0, 0)
-        # Red pill gradient: slightly brighter top, deeper bottom
+        # Light blue pill gradient: slightly brighter top (#38bdf8), deeper bottom (#0284c7)
         t_y = (y / float(size))
-        pill_r = 255
-        pill_g = int(24 * (1.0 - t_y))
-        pill_b = int(24 * (1.0 - t_y))
+        pill_r = int(56 * (1.0 - t_y) + 2 * t_y)
+        pill_g = int(189 * (1.0 - t_y) + 132 * t_y)
+        pill_b = int(248 * (1.0 - t_y) + 199 * t_y)
         
         r = int((255 * alpha_white + pill_r * alpha_red) / total_alpha)
         g = int((255 * alpha_white + pill_g * alpha_red) / total_alpha)
@@ -146,7 +146,10 @@ def render_apple_touch_icon(size=180):
         
         # Background: sleek dark #0f0f0f
         bg_r, bg_g, bg_b = 15, 15, 15
-        pill_r, pill_g, pill_b = 255, 18, 18
+        t_y = (y / float(size))
+        pill_r = int(56 * (1.0 - t_y) + 2 * t_y)
+        pill_g = int(189 * (1.0 - t_y) + 132 * t_y)
+        pill_b = int(248 * (1.0 - t_y) + 199 * t_y)
         white_r, white_g, white_b = 255, 255, 255
 
         # Blend pill over bg
