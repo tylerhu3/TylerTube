@@ -1,6 +1,6 @@
 /* ==========================================================================
-   Drive Video Player (YouTube-Style MPEG1-TS + MP2 WebAudio JSMpeg Player)
-   Ported from tesla-video-drive/public/twitch-client/index.html
+   WebCodecs Video Player chrome (YouTube-style controls over a canvas)
+   Class names keep the historical yt-drive-* / drive-* prefixes
    ========================================================================== */
 
 .drive-mode-wrapper {
@@ -668,15 +668,9 @@
     letter-spacing: 0.02em;
 }
 
-.drive-switch-btn.active,
-.drive-mode-nav-btn.active {
-    background: #5c16c5;
-    border-color: #772ce8;
-    color: #ffffff;
-}
-
-/* WebCodecs player (WebCodecsPlayer.jsx): same chrome, its own accent */
+/* WebCodecs player accent (tag + active player-switch buttons) */
 .webcodecs-switch-btn.active,
+.player-mode-nav-btn.active,
 .yt-webcodecs-player .yt-drive-tag {
     background: #0b7a75;
     border-color: #12a39c;

@@ -7,5 +7,5 @@
 @import "./side-menu.css"; /* Hamburger side menu drawer */
 @import "./subpages.css"; /* History & Favorites pages, empty state */
 @import "./mobile.css"; /* Mobile bottom nav, mobile view mode, responsive breakpoints */
-@import "./drive-player.css"; /* Drive (JSMpeg) player chrome: .drive-* / .yt-* */
+@import "./webcodecs-player.css"; /* WebCodecs player chrome: .yt-* */
 @import "./theme-picker.css"; /* Color theme picker (navbar + side menu) */

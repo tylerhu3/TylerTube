@@ -1,4 +1,4 @@
-// Pure pieces of the WebCodecs Drive stream (codec=webcodecs on /ws/mpeg1, see drive-ws.js):
+// Pure pieces of the WebCodecs stream (/ws/mpeg1, see drive-ws.js):
 // ffmpeg args, Annex-B access-unit splitter, PCM coalescer and binary message packing.
 // Client side: src/components/webcodecs/protocol.js. Wire formats must change together.
 //   [4][keyframe u8][timestamp u64 BE, µs][H.264 Annex-B access unit]

@@ -1,8 +1,6 @@
-// Presentational pieces of the Drive-style player chrome (yt-* classes, drive-player.css).
-// Used by WebCodecsPlayer.jsx. DriveVideoPlayer.jsx still renders its own identical JSX;
-// it can switch to these later (kept separate so the JSMpeg player's behaviour is untouched).
+// Presentational pieces of the WebCodecs player chrome (yt-* classes, webcodecs-player.css).
 import React from "react";
-import { formatDriveTime } from "./driveUtils";
+import { formatPlayerTime } from "./playerUtils";
 
 const ICONS = {
   play: "M8 5v14l11-7z",
@@ -181,16 +179,16 @@ export function ControlBar({
             type="range"
             className="yt-vol-slider"
             min="0"
-            max="100"
+            max="300"
             value={volumePct}
             onChange={(e) => onSetVolume(Number(e.target.value) / 100)}
-            title="Volume"
+            title={`Volume ${volumePct}%`}
             aria-label={volumeLabel}
           />
         </div>
         <span className="yt-time">
-          {formatDriveTime(displayTime)}
-          {duration > 0 ? ` / ${formatDriveTime(duration)}` : ""}
+          {formatPlayerTime(displayTime)}
+          {duration > 0 ? ` / ${formatPlayerTime(duration)}` : ""}
         </span>
       </div>
 

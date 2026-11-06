@@ -1,4 +1,4 @@
-// WebCodecs Drive wire format (client side). Server side: server/webcodecs-stream.js.
+// WebCodecs wire format (client side). Server side: server/webcodecs-stream.js.
 // Binary frames (first byte = type):
 //   4: [4][keyframe u8][timestamp u64 BE, µs from stream start][H.264 Annex-B access unit]
 //   2: [2][PCM s16le, mono, 44100 Hz]

@@ -11,7 +11,6 @@ export default function Navbar({
   playerMode = "standard",
   onTogglePlayerMode,
   viewMode = "desktop",
-  onViewModeChange,
   theme = "light",
   onToggleTheme,
   colorTheme = "lightblue",
@@ -114,34 +113,6 @@ export default function Navbar({
         </div>
 
         <div className="header-actions">
-          {/* Top Switcher: Mobile vs Desktop View */}
-          <div
-            className="view-mode-switcher"
-            role="group"
-            aria-label="Switch between Desktop and Mobile view"
-          >
-            <button
-              type="button"
-              className={`view-mode-btn ${!isMobileMode ? "active" : ""}`}
-              onClick={() => onViewModeChange?.("desktop")}
-              aria-pressed={!isMobileMode}
-              title="Switch to Desktop View (M)"
-            >
-              <span className="view-mode-icon" aria-hidden="true">🖥</span>
-              <span className="view-mode-label">Desktop</span>
-            </button>
-            <button
-              type="button"
-              className={`view-mode-btn ${isMobileMode ? "active" : ""}`}
-              onClick={() => onViewModeChange?.("mobile")}
-              aria-pressed={isMobileMode}
-              title="Switch to Mobile View (M)"
-            >
-              <span className="view-mode-icon" aria-hidden="true">📱</span>
-              <span className="view-mode-label">Mobile</span>
-            </button>
-          </div>
-
           {!isMobileMode ? (
             <div className="desktop-search-wrapper">
               <input
@@ -193,23 +164,23 @@ export default function Navbar({
           {onTogglePlayerMode && (
             <button
               type="button"
-              className={`btn-secondary drive-mode-nav-btn ${
-                playerMode !== "standard" ? "active" : ""
+              className={`btn-secondary player-mode-nav-btn ${
+                playerMode === "webcodecs" ? "active" : ""
               }`}
               onClick={onTogglePlayerMode}
               title={
-                playerMode !== "standard"
+                playerMode === "webcodecs"
                   ? "Switch to Standard Video Player (D)"
-                  : "Switch to Tesla Drive MPEG1 Video Player (D)"
+                  : "Switch to WebCodecs Video Player (D)"
               }
             >
               {isMobileMode
-                ? playerMode !== "standard"
+                ? playerMode === "webcodecs"
                   ? "🎬"
-                  : "🚗"
-                : playerMode !== "standard"
+                  : "⚡"
+                : playerMode === "webcodecs"
                   ? "🎬 Standard Player"
-                  : "🚗 Drive Player"}
+                  : "⚡ WebCodecs Player"}
             </button>
           )}
 

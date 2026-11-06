@@ -1,6 +1,6 @@
-// WebCodecs player: H.264 + PCM over the Drive WebSocket (/ws/mpeg1?codec=webcodecs), decoded by
+// WebCodecs player: H.264 + PCM over the stream WebSocket (/ws/mpeg1, server/drive-ws.js), decoded by
 // VideoDecoder onto a canvas, audio on an AudioContext that is also the master clock.
-// Engine: webcodecs/WebCodecsEngine.js. Same props and imperative handle as DriveVideoPlayer.
+// Engine: webcodecs/WebCodecsEngine.js. Imperative handle: seekTo / skipBy / togglePlayPause (VideoPlayer's external buttons).
 import React, {
   useEffect,
   useRef,
@@ -10,8 +10,8 @@ import React, {
   useImperativeHandle
 } from "react";
 import { APP_VERSION } from "../version";
-import { formatDriveTime } from "./drive/driveUtils";
-import DriveSettingsMenu from "./drive/DriveSettingsMenu";
+import { formatPlayerTime } from "./webcodecs/playerUtils";
+import SettingsMenu from "./webcodecs/SettingsMenu";
 import {
   PlayerTopBar,
   BufferingOverlay,
@@ -20,15 +20,18 @@ import {
   StatsPanel,
   SeekBar,
   ControlBar
-} from "./drive/PlayerChrome";
+} from "./webcodecs/PlayerChrome";
 import { WebCodecsEngine } from "./webcodecs/WebCodecsEngine";
 import { isWebCodecsSupported } from "./webcodecs/protocol";
 import { mediaTimeFromStream } from "./webcodecs/scheduler";
+
+const MAX_VOLUME = 3;
 
 const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   {
     video,
     savedTime = 0,
+    getStartTime,
     onTimeUpdate,
     onEnded,
     isHidden = false,
@@ -201,6 +204,13 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     [seekTo, triggerSkipIndicator]
   );
 
+  // Save the exact current position (pause / player switch / unmount), not just whole seconds.
+  const reportExactPosition = useCallback(() => {
+    const t = currentMediaTimeRef.current;
+    if (!videoIdRef.current || !onTimeUpdateRef.current || !(t > 0)) return;
+    onTimeUpdateRef.current(videoIdRef.current, t, mediaDurationRef.current, { force: true });
+  }, []);
+
   const togglePlayPause = useCallback(
     (withBezel = true) => {
       const eng = engineRef.current;
@@ -223,10 +233,11 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
       isPausedRef.current = nextPaused;
       eng.setPaused(nextPaused); // also sends pause/resume to the server
       setIsPaused(nextPaused);
+      if (nextPaused) reportExactPosition();
       if (withBezel) triggerBezel(nextPaused ? "pause" : "play");
       showControlsTemporarily();
     },
-    [seekTo, showControlsTemporarily, triggerBezel, tryUnlockAudio]
+    [reportExactPosition, seekTo, showControlsTemporarily, triggerBezel, tryUnlockAudio]
   );
 
   restartFromEndRef.current = () => {
@@ -244,7 +255,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
 
   const handleSetVolume = useCallback(
     (val) => {
-      const clamped = Math.max(0, Math.min(1, val));
+      const clamped = Math.max(0, Math.min(MAX_VOLUME, val));
       curVolRef.current = clamped;
       if (clamped > 0) {
         isMutedRef.current = false;
@@ -427,8 +438,9 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     canvas.className = "yt-drive-canvas";
     host.appendChild(canvas);
 
-    const startSeek =
-      Number(initialSavedTimeRef.current) > 0 ? Number(initialSavedTimeRef.current) : 0;
+    // getStartTime (from VideoPlayer) gives the exact position the other player left off at.
+    const requestedStart = getStartTime?.() ?? initialSavedTimeRef.current;
+    const startSeek = Number(requestedStart) > 0 ? Number(requestedStart) : 0;
 
     isPausedRef.current = false;
     isEndedRef.current = false;
@@ -600,8 +612,8 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         `Audio: ${s.audioState}, queue ${s.audioQueuedMs} ms, ${s.audioSources} sources, out latency ${s.outputLatencyMs} ms`,
         `A/V Offset: ${offTxt} (frame vs heard audio; sync ${Math.round(syncOffsetRef.current * 1000)} ms)`,
         `Buffer Health: ${s.bufferedAheadSec.toFixed(1)}s (Rebuffer target: ${bufferTargetRef.current}s, underruns ${s.underruns})`,
-        `Position: ${formatDriveTime(currentMediaTimeRef.current)}${
-          mediaDurationRef.current > 0 ? " / " + formatDriveTime(mediaDurationRef.current) : ""
+        `Position: ${formatPlayerTime(currentMediaTimeRef.current)}${
+          mediaDurationRef.current > 0 ? " / " + formatPlayerTime(mediaDurationRef.current) : ""
         }`,
         `Version: ${APP_VERSION}`
       ]);
@@ -610,6 +622,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     return () => {
       cancelled = true;
       clearInterval(statsTimer);
+      reportExactPosition();
       engine.destroy();
       if (engineRef.current === engine) engineRef.current = null;
       if (host) host.innerHTML = "";
@@ -630,7 +643,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     (clientX) => {
       const ratio = getRatioFromClientX(clientX);
       setHoverPct(ratio * 100);
-      setHoverTimeText(formatDriveTime(ratio * (mediaDurationRef.current || 0)));
+      setHoverTimeText(formatPlayerTime(ratio * (mediaDurationRef.current || 0)));
       return ratio;
     },
     [getRatioFromClientX]
@@ -660,7 +673,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     };
   }, [isDraggingSeek, getRatioFromClientX, seekTo, updateSeekHoverFromClientX]);
 
-  // YouTube keyboard shortcuts (same as DriveVideoPlayer)
+  // YouTube keyboard shortcuts
   useEffect(() => {
     if (isHidden) return;
     const onKeyDown = (e) => {
@@ -784,7 +797,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         </div>
         <div className="yt-buffering-overlay">
           <div className="yt-buffering-text">
-            This browser has no WebCodecs VideoDecoder. Use the Standard or Drive player.
+            This browser has no WebCodecs VideoDecoder. Use the Standard player.
           </div>
           {onSwitchToStandard && (
             <button type="button" className="yt-stop-btn" onClick={onSwitchToStandard}>
@@ -828,7 +841,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
       <SkipIndicators leftLabel={skipLeftLabel} rightLabel={skipRightLabel} />
       <StatsPanel open={statsOpen} lines={statsLines} onClose={() => setStatsOpen(false)} />
 
-      <DriveSettingsMenu
+      <SettingsMenu
         menuRef={settingsMenuRef}
         open={settingsOpen}
         playbackSpeed={playbackSpeed}

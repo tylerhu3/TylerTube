@@ -1,0 +1,1256 @@
+diff --git a/server/drive-ws.js b/server/drive-ws.js
+index 311196f..0b6f16f 100644
+--- a/server/drive-ws.js
++++ b/server/drive-ws.js
+@@ -5,6 +5,116 @@ import { spawn } from "node:child_process";
+ import { WebSocketServer } from "ws";
+ import { resolveLocalVideoFile, probeVideoDuration } from "./media-files.js";
+ 
++export const DRIVE_QUALITY_SCALES = {
++  360: "640:360",
++  480: "854:480",
++  720: "1280:720",
++  1080: "1920:1080"
++};
++
++// atempo accepts 0.5..100 per instance; chain instances for slower speeds.
++export function buildAtempoChain(speed) {
++  let s = Number(speed);
++  if (!Number.isFinite(s) || s <= 0 || Math.abs(s - 1.0) <= 0.01) return [];
++  const parts = [];
++  while (s < 0.5) {
++    parts.push("atempo=0.5");
++    s /= 0.5;
++  }
++  while (s > 2.0) {
++    parts.push("atempo=2.0");
++    s /= 2.0;
++  }
++  if (Math.abs(s - 1.0) > 0.001) {
++    parts.push(`atempo=${Number(s.toFixed(4))}`);
++  }
++  return parts;
++}
++
++// ffmpeg arguments for one Drive stream (pure, unit-tested in tests/drive-sync.test.js).
++// A/V alignment: input -ss rebases both streams so the seek point is t=0; the video
++// is padded/trimmed to start exactly at 0 at a constant 30 fps (the fps filter with
++// start_time=0 yields CFR; no -fps_mode, which needs ffmpeg >= 5.1) and the audio is padded/trimmed to start at 0 with continuous
++// sample-accurate timestamps (aresample first_pts=0, async stretch/squeeze) *before*
++// atempo, so speed changes scale both tracks from the same origin.
++export function buildDriveFfmpegArgs({ input, seek = 0, speed = 1, quality = 720 }) {
++  const scale = DRIVE_QUALITY_SCALES[quality] || "1280:720";
++  const bitrate = scale.endsWith("360")
++    ? "600k"
++    : scale.endsWith("480")
++      ? "900k"
++      : scale.endsWith("720")
++        ? "1600k"
++        : "2600k";
++  const spd = Number(speed) || 1.0;
++  const isOneX = Math.abs(spd - 1.0) <= 0.01;
++
++  const inputArgs = [];
++  if (seek > 0) {
++    inputArgs.push("-ss", Number(seek).toFixed(3));
++  }
++  // Buffer-ahead readrate: transcode at up to 1.6x playback speed so the client
++  // can build a healthy jitter buffer against spotty or high-latency connections.
++  // Initial burst: 10s of audio/video for instant startup headroom.
++  const burstReadRate = Math.min(2.5, Math.max(1.3, spd * 1.5));
++  inputArgs.push(
++    "-readrate",
++    String(burstReadRate),
++    "-readrate_initial_burst",
++    "10.0",
++    "-fflags",
++    "+genpts",
++    "-i",
++    input
++  );
++
++  const vfParts = [];
++  if (!isOneX) {
++    vfParts.push(`setpts=PTS/${spd}`);
++  }
++  vfParts.push("fps=fps=30:start_time=0", `scale=${scale}`);
++
++  const afParts = ["aresample=44100:async=1000:first_pts=0"];
++  afParts.push(...buildAtempoChain(spd));
++
++  return [
++    ...inputArgs,
++    "-map",
++    "0:v:0",
++    "-map",
++    "0:a:0?",
++    "-c:v",
++    "mpeg1video",
++    "-q:v",
++    "5",
++    "-b:v",
++    bitrate,
++    "-bf",
++    "0",
++    "-vf",
++    vfParts.join(","),
++    "-c:a",
++    "mp2",
++    "-b:a",
++    "128k",
++    "-ar",
++    "44100",
++    "-ac",
++    "2",
++    "-af",
++    afParts.join(","),
++    "-pes_payload_size",
++    "0",
++    "-f",
++    "mpegts",
++    "-muxdelay",
++    "0.001",
++    "-muxpreload",
++    "0",
++    "-"
++  ];
++}
++
+ export function attachDriveWebSocketServer(httpServer, videosDir) {
+   if (!httpServer) return null;
+ 
+@@ -41,12 +151,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
+     const initialLoop =
+       params.get("loop") === "1" || params.get("loop") === "true";
+ 
+-    const qualMap = {
+-      360: "640:360",
+-      480: "854:480",
+-      720: "1280:720",
+-      1080: "1920:1080"
+-    };
++    const qualMap = DRIVE_QUALITY_SCALES;
+     let currentQuality = qualMap[initialQuality] ? initialQuality : 720;
+     let currentSpeed = Math.max(0.25, Math.min(2.0, initialSpeed));
+     let currentSeek = Math.max(0, initialSeek);
+@@ -129,14 +234,6 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
+       killActiveFfmpeg();
+       if (wsClosed) return;
+ 
+-      const scale = qualMap[currentQuality] || "1280:720";
+-      const bitrate = scale.endsWith("360")
+-        ? "600k"
+-        : scale.endsWith("480")
+-          ? "900k"
+-          : scale.endsWith("720")
+-            ? "1600k"
+-            : "2600k";
+       const spd = currentSpeed;
+ 
+       if (isReset) {
+@@ -154,75 +251,14 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
+       }
+ 
+       try {
+-        const inputArgs = [];
+-        if (currentSeek > 0) {
+-          inputArgs.push("-ss", currentSeek.toFixed(3));
+-        }
+-        // Buffer-ahead readrate: transcode at up to 1.6x playback speed so the client
+-        // can build a healthy jitter buffer against spotty or high-latency connections.
+-        // Initial burst: 10s of audio/video for instant startup headroom.
+-        const burstReadRate = Math.min(2.5, Math.max(1.3, (parseFloat(spd) || 1.0) * 1.5));
+-        inputArgs.push(
+-          "-readrate",
+-          String(burstReadRate),
+-          "-readrate_initial_burst",
+-          "10.0",
+-          "-fflags",
+-          "+genpts",
+-          "-i",
+-          streamUrl
+-        );
+-
+-        const vfParts = [];
+-        if (Math.abs(spd - 1.0) > 0.01) {
+-          vfParts.push(`setpts=PTS/${spd}`);
+-        }
+-        vfParts.push("fps=30", `scale=${scale}`);
+-
+-        const afParts = [];
+-        if (Math.abs(spd - 1.0) > 0.01) {
+-          afParts.push(`atempo=${spd}`);
+-        }
+-        afParts.push("aresample=async=1");
+-
+         const ffmpeg = spawn(
+           "ffmpeg",
+-          [
+-            ...inputArgs,
+-            "-map",
+-            "0:v:0",
+-            "-map",
+-            "0:a:0?",
+-            "-c:v",
+-            "mpeg1video",
+-            "-q:v",
+-            "5",
+-            "-b:v",
+-            bitrate,
+-            "-bf",
+-            "0",
+-            "-vf",
+-            vfParts.join(","),
+-            "-c:a",
+-            "mp2",
+-            "-b:a",
+-            "128k",
+-            "-ar",
+-            "44100",
+-            "-ac",
+-            "2",
+-            "-af",
+-            afParts.join(","),
+-            "-pes_payload_size",
+-            "0",
+-            "-f",
+-            "mpegts",
+-            "-muxdelay",
+-            "0.001",
+-            "-muxpreload",
+-            "0",
+-            "-"
+-          ],
++          buildDriveFfmpegArgs({
++            input: streamUrl,
++            seek: currentSeek,
++            speed: spd,
++            quality: currentQuality
++          }),
+           { stdio: ["ignore", "pipe", "pipe"] }
+         );
+ 
+diff --git a/src/components/DriveVideoPlayer.jsx b/src/components/DriveVideoPlayer.jsx
+index c1fc221..dfa7acd 100644
+--- a/src/components/DriveVideoPlayer.jsx
++++ b/src/components/DriveVideoPlayer.jsx
+@@ -7,7 +7,15 @@ import React, {
+   useImperativeHandle
+ } from "react";
+ import { APP_VERSION } from "../version";
+-import { formatDriveTime } from "./drive/driveUtils";
++import {
++  formatDriveTime,
++  AV_SYNC,
++  anchorAvSync,
++  computeAvDrift,
++  computeResyncTarget,
++  createAvSyncState,
++  evaluateAvSync
++} from "./drive/driveUtils";
+ import { ensureJSMpegPatched, flushPlayerBuffers } from "./drive/jsmpegPatch";
+ import DriveSettingsMenu from "./drive/DriveSettingsMenu";
+ 
+@@ -58,6 +66,9 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+   const initialSavedTimeRef = useRef(savedTime);
+   const bufferTargetRef = useRef(2.0);
+   const isBufferingRef = useRef(true);
++  const avSyncStateRef = useRef(createAvSyncState(0));
++  const autoResyncCountRef = useRef(0);
++  const lastSyncReasonRef = useRef("none");
+ 
+   const [isPaused, setIsPaused] = useState(false);
+   const [isEnded, setIsEnded] = useState(false);
+@@ -119,6 +130,17 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+     return false;
+   }, []);
+ 
++  // Restart the A/V drift monitor's grace period after anything that legitimately
++  // disturbs the clocks (seek, reset, resume, speed/quality, visibility, buffering).
++  const anchorSync = useCallback(() => {
++    avSyncStateRef.current = anchorAvSync(avSyncStateRef.current, Date.now());
++    const p = playerRef.current;
++    if (p) {
++      p.__avDrift = null;
++      p.__holdStart = 0;
++    }
++  }, []);
++
+   const showControlsTemporarily = useCallback(() => {
+     setControlsHidden(false);
+     if (controlsHideTimerRef.current) {
+@@ -175,13 +197,15 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+           if (playerRef.current && playerRef.current.audioOut) {
+             playerRef.current.audioOut.resetEnqueuedTime();
+           }
++          anchorSync();
+         })
+         .catch(() => {});
+     }
+-  }, []);
++  }, [anchorSync]);
+ 
+   const seekTo = useCallback(
+-    (targetSec) => {
++    (targetSec, opts) => {
++      const silent = Boolean(opts && opts.silent);
+       const p = playerRef.current;
+       if (!p) return;
+       const dur = mediaDurationRef.current > 0 ? mediaDurationRef.current : 0;
+@@ -211,7 +235,8 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+           p.audioOut.resetEnqueuedTime();
+         }
+       }
+-      showControlsTemporarily();
++      anchorSync();
++      if (!silent) showControlsTemporarily();
+       sendWsCommand({ type: "seek", time: clamped });
+ 
+       if (videoIdRef.current && onTimeUpdateRef.current) {
+@@ -220,9 +245,43 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+         });
+       }
+     },
+-    [sendWsCommand, showControlsTemporarily]
++    [anchorSync, sendWsCommand, showControlsTemporarily]
++  );
++
++  // Hard A/V resync: restart the server stream from what the user is hearing right now.
++  // Uses the existing "seek" message (server kills ffmpeg, sends "reset", respawns).
++  const hardResync = useCallback(
++    (manual) => {
++      const p = playerRef.current;
++      if (!p || isEndedRef.current) return false;
++      // Read the audio clock now (currentMediaTimeRef only updates on video decode and
++      // is stale while video is held). JSMpeg's MP2 audio.currentTime is already the
++      // heard position (decodedTime - enqueuedTime), same as onVideoDecode uses.
++      const heardPts =
++        p.audio && p.audio.decodedTime > 0 ? p.audio.currentTime : NaN;
++      const target = computeResyncTarget({
++        seekBase: seekBaseTimeRef.current,
++        heardPts,
++        firstPts: firstStreamPtsRef.current,
++        speed: playbackSpeedRef.current,
++        duration: mediaDurationRef.current,
++        fallback: currentMediaTimeRef.current
++      });
++      if (manual) {
++        // Manual resyncs don't count against the automatic rate limit.
++        tryUnlockAudio();
++        setStatusText("Resyncing audio/video...");
++      }
++      seekTo(target, { silent: !manual });
++      return true;
++    },
++    [seekTo, tryUnlockAudio]
+   );
+ 
++  const handleManualResync = useCallback(() => {
++    hardResync(true);
++  }, [hardResync]);
++
+   const skipBy = useCallback(
+     (deltaSec) => {
+       if (!playerRef.current) return;
+@@ -272,6 +331,7 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+         p.audioOut.resetEnqueuedTime();
+       }
+       setIsPaused(nextPaused);
++      anchorSync();
+ 
+       if (nextPaused) {
+         sendWsCommand({ type: "pause" });
+@@ -283,6 +343,7 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+       showControlsTemporarily();
+     },
+     [
++      anchorSync,
+       seekTo,
+       sendWsCommand,
+       showControlsTemporarily,
+@@ -350,13 +411,14 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+       setPlaybackSpeed(spd);
+       seekBaseTimeRef.current = currentMediaTimeRef.current;
+       firstStreamPtsRef.current = null;
++      anchorSync();
+       sendWsCommand({
+         type: "speed",
+         speed: spd,
+         currentTime: currentMediaTimeRef.current
+       });
+     },
+-    [sendWsCommand]
++    [anchorSync, sendWsCommand]
+   );
+ 
+   const handleSetQuality = useCallback(
+@@ -365,13 +427,14 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+       setQuality(q);
+       seekBaseTimeRef.current = currentMediaTimeRef.current;
+       firstStreamPtsRef.current = null;
++      anchorSync();
+       sendWsCommand({
+         type: "quality",
+         quality: q,
+         currentTime: currentMediaTimeRef.current
+       });
+     },
+-    [sendWsCommand]
++    [anchorSync, sendWsCommand]
+   );
+ 
+   const handleToggleLoop = useCallback(() => {
+@@ -407,7 +470,8 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+         playerRef.current.audioOut.resetEnqueuedTime();
+       }
+     }
+-  }, []);
++    anchorSync();
++  }, [anchorSync]);
+ 
+   const handleToggleFullscreen = useCallback(() => {
+     const box = playerBoxRef.current;
+@@ -559,6 +623,9 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+     seekBaseTimeRef.current = startSeek;
+     currentMediaTimeRef.current = startSeek;
+     mediaDurationRef.current = 0;
++    avSyncStateRef.current = createAvSyncState(Date.now());
++    autoResyncCountRef.current = 0;
++    lastSyncReasonRef.current = "none";
+ 
+     setIsPaused(false);
+     setIsEnded(false);
+@@ -614,6 +681,7 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+           setLoopEnabled(Boolean(msg.loop));
+         } else if (msg.type === "reset") {
+           flushPlayerBuffers(playerRef.current);
++          anchorSync();
+           firstStreamPtsRef.current = null;
+           isBufferingRef.current = true;
+           setIsBuffering(true);
+@@ -745,21 +813,15 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+               p.audioOut.context.state !== "running"
+           );
+           let driftMs = 0;
+-          if (
+-            p.audio &&
+-            p.video &&
+-            p.audio.decodedTime > 0 &&
+-            p.video.decodedTime > 0
+-          ) {
+-            const audibleAudioPts = Math.max(
+-              0,
+-              p.audio.decodedTime - (p.audioOut ? p.audioOut.enqueuedTime : 0)
+-            );
+-            driftMs = Math.round(
+-              (p.video.decodedTime -
+-                (audibleAudioPts + (p.syncOffset || 0))) *
+-                1000
+-            );
++          if (p.audio && p.video) {
++            const drift = computeAvDrift({
++              videoPts: p.video.decodedTime,
++              audioPts: p.audio.decodedTime,
++              audioQueuedSec: p.audioOut ? p.audioOut.enqueuedTime : 0,
++              sampleRate: p.audio.sampleRate,
++              syncOffset: p.syncOffset
++            });
++            if (drift !== null) driftMs = Math.round(drift * 1000);
+           }
+ 
+           const bufSec = p.__bufferedAhead || 0;
+@@ -792,6 +854,9 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+             `A/V Drift: ${driftMs > 0 ? "+" : ""}${driftMs} ms (Sync: ${Math.round(
+               syncOffsetRef.current * 1000
+             )} ms)`,
++            `A/V Auto-Sync: ${lastSyncReasonRef.current} (resyncs: ${
++              autoResyncCountRef.current
++            }, frames skipped: ${p.__framesSkipped || 0})`,
+             `Audio Queue: ${audioQueueMs} ms (${
+               audioLocked ? "locked" : "running"
+             })`,
+@@ -813,6 +878,10 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+     player.__currentMediaTime = startSeek;
+ 
+     player.__onBufferingStateChange = (buffering, bufSec) => {
++      if (isBufferingRef.current && !buffering) {
++        // Playback (re)starts with a fresh audio schedule: re-anchor the monitor.
++        anchorSync();
++      }
+       isBufferingRef.current = buffering;
+       setIsBuffering(buffering);
+       setBufferedAheadSec(Math.max(0, bufSec || 0));
+@@ -869,6 +938,86 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [targetFile, isHidden]);
+ 
++  // A/V drift monitor. The patched frame scheduler (jsmpegPatch.js) corrects small drift
++  // every frame (hold when video is ahead, decode-without-render when behind) and
++  // publishes player.__avDrift; this samples it and escalates per evaluateAvSync():
++  // soft (boost catch-up budget) -> hard (restart stream at the heard position).
++  useEffect(() => {
++    if (isHidden || !targetFile) return undefined;
++    const id = setInterval(() => {
++      const p = playerRef.current;
++      if (!p) return;
++      const now = Date.now();
++      const audioRunning = Boolean(
++        p.audioOut &&
++          p.audioOut.context &&
++          p.audioOut.context.state === "running"
++      );
++      const fresh =
++        Number.isFinite(p.__avDrift) &&
++        now - (p.__avDriftAt || 0) <= AV_SYNC.sampleMaxAgeMs;
++      const active =
++        fresh &&
++        audioRunning &&
++        !isPausedRef.current &&
++        !isEndedRef.current &&
++        !isBufferingRef.current &&
++        !isDraggingSeekRef.current &&
++        document.visibilityState !== "hidden";
++      const result = evaluateAvSync(
++        avSyncStateRef.current,
++        {
++          drift: fresh ? p.__avDrift : null,
++          active,
++          framesSkipped: p.__framesSkipped || 0
++        },
++        now
++      );
++      avSyncStateRef.current = result.state;
++      if (result.action === "soft") {
++        lastSyncReasonRef.current = `correcting (${result.reason})`;
++        if (p.__avDrift < 0) {
++          // Video behind: give the render-skipping catch-up a larger per-tick budget.
++          p.__syncBoostUntil = now + AV_SYNC.monitorIntervalMs * 2;
++        }
++      } else if (result.action === "hard") {
++        autoResyncCountRef.current += 1;
++        lastSyncReasonRef.current = `resynced (${result.reason})`;
++        hardResync(false);
++      } else if (result.reason === "in-sync") {
++        lastSyncReasonRef.current = "in sync";
++      }
++    }, AV_SYNC.monitorIntervalMs);
++    return () => clearInterval(id);
++  }, [hardResync, isHidden, targetFile]);
++
++  // Returning to a backgrounded tab: the browser may have suspended the AudioContext
++  // and rAF (so nothing was decoded). Try to resume audio and re-anchor the monitor.
++  useEffect(() => {
++    const onVisibility = () => {
++      if (document.visibilityState !== "visible") return;
++      const p = playerRef.current;
++      if (!p) return;
++      const ctx = p.audioOut && p.audioOut.context;
++      if (ctx && ctx.state !== "running" && ctx.resume) {
++        ctx
++          .resume()
++          .then(() => {
++            if (playerRef.current && playerRef.current.audioOut) {
++              playerRef.current.audioOut.resetEnqueuedTime();
++            }
++            anchorSync();
++          })
++          .catch(() => {});
++      }
++      anchorSync();
++    };
++    document.addEventListener("visibilitychange", onVisibility);
++    return () => {
++      document.removeEventListener("visibilitychange", onVisibility);
++    };
++  }, [anchorSync]);
++
+   // Seek bar scrubbing handlers
+   const getRatioFromClientX = useCallback((clientX) => {
+     const wrap = progressWrapRef.current;
+@@ -1134,6 +1283,8 @@ const DriveVideoPlayer = forwardRef(function DriveVideoPlayer(
+         onSetBufferTarget={handleSetBufferTarget}
+         onAdjustSync={handleAdjustSync}
+         onResetSync={handleResetSync}
++        onResyncNow={handleManualResync}
++        resyncDisabled={isEnded || isHidden || !targetFile}
+         onToggleLoop={handleToggleLoop}
+         onToggleStats={() => setStatsOpen((prev) => !prev)}
+       />
+diff --git a/src/components/drive/DriveSettingsMenu.jsx b/src/components/drive/DriveSettingsMenu.jsx
+index 1168010..b800dd5 100644
+--- a/src/components/drive/DriveSettingsMenu.jsx
++++ b/src/components/drive/DriveSettingsMenu.jsx
+@@ -18,6 +18,8 @@ export default function DriveSettingsMenu({
+   onSetBufferTarget,
+   onAdjustSync,
+   onResetSync,
++  onResyncNow,
++  resyncDisabled,
+   onToggleLoop,
+   onToggleStats
+ }) {
+@@ -122,6 +124,17 @@ export default function DriveSettingsMenu({
+             +100ms
+           </button>
+         </div>
++        <div className="yt-chip-row">
++          <button
++            type="button"
++            className="yt-chip"
++            onClick={onResyncNow}
++            disabled={Boolean(resyncDisabled)}
++            title="Restart the stream at the current position to realign audio and video"
++          >
++            Resync A/V now
++          </button>
++        </div>
+       </div>
+ 
+       <div
+diff --git a/src/components/drive/driveUtils.js b/src/components/drive/driveUtils.js
+index 43e380e..83b6b55 100644
+--- a/src/components/drive/driveUtils.js
++++ b/src/components/drive/driveUtils.js
+@@ -21,3 +21,210 @@ export const BUFFER_OPTIONS = [
+   { label: "2s (Normal)", target: 2.0 },
+   { label: "5s (Mobile / Deep)", target: 5.0 }
+ ];
++
++// ---- A/V sync (drift = video PTS - audible audio PTS - user offset; >0 = video ahead) ----
++
++export const AV_SYNC = Object.freeze({
++  monitorIntervalMs: 500,
++  // Lip-sync becomes noticeable around 100-150 ms; one 30 fps frame is ~33 ms, so
++  // 120 ms leaves room for ~3 frames of scheduler jitter before we call it drift.
++  softThresholdSec: 0.12,
++  // Beyond 1 s the frame scheduler would need to skip/hold for too long; restart.
++  hardThresholdSec: 1.0,
++  // Soft drift that survives this many consecutive samples (3 s) may escalate to hard
++  // (see evaluateAvSync for the direction/progress rules).
++  softPersistSamples: 6,
++  // No decisions right after seek/resume/speed/quality/visibility/buffering changes.
++  graceMs: 2500,
++  hardCooldownMs: 10000,
++  hardWindowMs: 120000,
++  maxHardPerWindow: 3,
++  // Video-behind catch-up counts as "making progress" if |drift| shrank by this much.
++  minProgressSec: 0.02,
++  // A second hard resync wanted in the same direction within this window means the
++  // first one didn't help: stop auto hard-resyncing for the rest of the stream.
++  backoffWindowMs: 20000,
++  // Drift samples older than this (e.g. rAF stopped in a background tab) are ignored.
++  sampleMaxAgeMs: 1000
++});
++
++// MP2 frames are always 1152 samples.
++export const MP2_FRAME_SAMPLES = 1152;
++
++// PTS (seconds) of the audio currently coming out of the speakers. JSMpeg's audio
++// decodedTime is the *start* PTS of the last decoded frame, while the queued time
++// runs to the *end* of that frame, so add one frame duration.
++export function computeAudiblePts(audioDecodedPts, audioQueuedSec, sampleRate) {
++  if (!Number.isFinite(audioDecodedPts) || audioDecodedPts <= 0) return null;
++  const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 44100;
++  const queued = Number.isFinite(audioQueuedSec) ? Math.max(0, audioQueuedSec) : 0;
++  return Math.max(0, audioDecodedPts + MP2_FRAME_SAMPLES / rate - queued);
++}
++
++export function computeAvDrift({
++  videoPts,
++  audioPts,
++  audioQueuedSec,
++  sampleRate,
++  syncOffset
++}) {
++  if (!Number.isFinite(videoPts) || videoPts <= 0) return null;
++  const heard = computeAudiblePts(audioPts, audioQueuedSec, sampleRate);
++  if (heard === null) return null;
++  return videoPts - (heard + (Number(syncOffset) || 0));
++}
++
++export function createAvSyncState(now = 0) {
++  return {
++    anchorAt: now,
++    outOfSyncSamples: 0,
++    hardResyncTimes: [],
++    // Current out-of-sync episode (for "is catch-up making progress?")
++    episodeStartAbs: null,
++    episodeStartSkipped: 0,
++    // Last automatic hard resync (for back-off when it didn't help)
++    lastHardAt: null,
++    lastHardDirection: 0,
++    autoHardDisabled: false
++  };
++}
++
++// Re-anchor after anything that legitimately disturbs the clocks.
++export function anchorAvSync(state, now) {
++  return { ...state, anchorAt: now, outOfSyncSamples: 0, episodeStartAbs: null };
++}
++
++// Decide what to do with one drift sample.
++// sample: {
++//   drift: number|null (seconds, >0 = video ahead),
++//   active: boolean (playing, not buffering, audio clock running),
++//   framesSkipped: number (cumulative frames decoded without rendering by the scheduler)
++// }
++// Returns { action: "none" | "soft" | "hard", reason, state }.
++// "soft" = the frame scheduler is (or should be) correcting; "hard" = restart the stream.
++// Escalation rules:
++// - |drift| >= hardThreshold -> hard.
++// - persistent soft drift with video AHEAD (audio stalled / video held) -> hard.
++// - persistent soft drift with video BEHIND -> hard only if catch-up is making no
++//   progress (drift not shrinking AND no frames being skipped); a slow decoder that
++//   is skipping frames would not be helped by a restart.
++// - back-off: if a hard resync is wanted again in the same direction within
++//   backoffWindowMs of the previous one, it didn't help -> disable auto-hard for the
++//   rest of the stream (soft only; the manual "Resync A/V now" still works).
++export function evaluateAvSync(state, sample, now, cfg = AV_SYNC) {
++  const s = {
++    ...createAvSyncState(0),
++    ...state,
++    hardResyncTimes: (state.hardResyncTimes || []).filter(
++      (t) => now - t < cfg.hardWindowMs
++    )
++  };
++  const resetEpisode = () => {
++    s.outOfSyncSamples = 0;
++    s.episodeStartAbs = null;
++  };
++  if (!sample || !sample.active || !Number.isFinite(sample.drift)) {
++    resetEpisode();
++    return { action: "none", reason: "inactive", state: s };
++  }
++  if (now - s.anchorAt < cfg.graceMs) {
++    resetEpisode();
++    return { action: "none", reason: "grace", state: s };
++  }
++  const abs = Math.abs(sample.drift);
++  if (abs <= cfg.softThresholdSec) {
++    resetEpisode();
++    return { action: "none", reason: "in-sync", state: s };
++  }
++
++  const direction = sample.drift > 0 ? 1 : -1;
++  const skipped = Number.isFinite(sample.framesSkipped) ? sample.framesSkipped : 0;
++  if (s.episodeStartAbs === null) {
++    s.episodeStartAbs = abs;
++    s.episodeStartSkipped = skipped;
++  }
++  s.outOfSyncSamples += 1;
++
++  const large = abs >= cfg.hardThresholdSec;
++  let hardReason = large ? "large-drift" : null;
++  if (!large && s.outOfSyncSamples >= cfg.softPersistSamples) {
++    if (direction > 0) {
++      hardReason = "persistent-video-ahead";
++    } else {
++      const shrinking = abs < s.episodeStartAbs - cfg.minProgressSec;
++      const skipping = skipped > s.episodeStartSkipped;
++      if (shrinking || skipping) {
++        // Catch-up is working (or the device is skipping as fast as it can):
++        // a restart wouldn't help. Start a new observation window.
++        s.outOfSyncSamples = 1;
++        s.episodeStartAbs = abs;
++        s.episodeStartSkipped = skipped;
++        return { action: "soft", reason: "catching-up", state: s };
++      }
++      hardReason = "persistent-video-behind";
++    }
++  }
++  if (!hardReason) {
++    return {
++      action: "soft",
++      reason: direction > 0 ? "video-ahead" : "video-behind",
++      state: s
++    };
++  }
++
++  if (s.autoHardDisabled) {
++    return { action: "soft", reason: "auto-hard-disabled", state: s };
++  }
++  if (
++    s.lastHardAt !== null &&
++    now - s.lastHardAt < cfg.backoffWindowMs &&
++    direction === s.lastHardDirection
++  ) {
++    s.autoHardDisabled = true;
++    return { action: "soft", reason: "hard-backoff", state: s };
++  }
++  const last = s.hardResyncTimes[s.hardResyncTimes.length - 1];
++  if (last !== undefined && now - last < cfg.hardCooldownMs) {
++    return { action: "soft", reason: "hard-cooldown", state: s };
++  }
++  if (s.hardResyncTimes.length >= cfg.maxHardPerWindow) {
++    return { action: "soft", reason: "hard-limit", state: s };
++  }
++  s.hardResyncTimes = [...s.hardResyncTimes, now];
++  s.lastHardAt = now;
++  s.lastHardDirection = direction;
++  s.anchorAt = now;
++  resetEpisode();
++  return { action: "hard", reason: hardReason, state: s };
++}
++
++// Media position to restart from on a hard resync, from the audio clock at resync time.
++// heardPts must already be the *heard* audio PTS (JSMpeg's MP2 audio.currentTime is
++// decodedTime - destination.enqueuedTime); firstPts/seekBase map stream PTS to media
++// time the same way DriveVideoPlayer's onVideoDecode does. Falls back to `fallback`
++// (e.g. currentMediaTimeRef) when the audio clock isn't usable.
++export function computeResyncTarget({
++  seekBase,
++  heardPts,
++  firstPts,
++  speed,
++  duration,
++  fallback
++}) {
++  const spd = Number.isFinite(speed) && speed > 0 ? speed : 1;
++  let target;
++  if (
++    Number.isFinite(heardPts) &&
++    heardPts > 0 &&
++    Number.isFinite(firstPts) &&
++    heardPts >= firstPts
++  ) {
++    target = (Number.isFinite(seekBase) ? seekBase : 0) + (heardPts - firstPts) * spd;
++  } else {
++    target = Number.isFinite(fallback) ? fallback : 0;
++  }
++  if (Number.isFinite(duration) && duration > 0) {
++    target = Math.min(duration - 0.1, target);
++  }
++  return Math.max(0, target);
++}
+diff --git a/src/components/drive/jsmpegPatch.js b/src/components/drive/jsmpegPatch.js
+index 88bb1c0..63ee9a7 100644
+--- a/src/components/drive/jsmpegPatch.js
++++ b/src/components/drive/jsmpegPatch.js
+@@ -1,9 +1,11 @@
+ // Runtime patches for the global window.JSMpeg (loaded from /jsmpeg.min.js in index.html).
+-// ensureJSMpegPatched() is idempotent (guarded by JSMpeg.__tylertubePatchedV3).
++// ensureJSMpegPatched() is idempotent (guarded by JSMpeg.__tylertubePatchedV4).
++import { AV_SYNC, computeAudiblePts } from "./driveUtils";
++
+ export function ensureJSMpegPatched() {
+   const JSMpeg = typeof window !== "undefined" ? window.JSMpeg : null;
+   if (!JSMpeg) return null;
+-  if (JSMpeg.__tylertubePatchedV3) return JSMpeg;
++  if (JSMpeg.__tylertubePatchedV4) return JSMpeg;
+ 
+   // 1. BitBuffer patch: never discard unread bytes on EVICT overflow; expand buffer instead
+   if (JSMpeg.BitBuffer) {
+@@ -287,6 +289,11 @@ export function ensureJSMpegPatched() {
+       }
+ 
+       // 2. Check if user paused
++      if (this.__isPaused || this.__isBuffering) {
++        // Drift is only meaningful during active playback; clear stale state.
++        this.__avDrift = null;
++        this.__holdStart = 0;
++      }
+       if (this.__isPaused) {
+         if (this.needsPausedPreview && this.video) {
+           if (this.video.decode()) {
+@@ -364,6 +371,7 @@ export function ensureJSMpegPatched() {
+         (!this.audio || !this.audio.ptsQueue || this.audio.ptsQueue.length === 0);
+ 
+       if (isStarved) {
++        this.__avDrift = null;
+         this.__isBuffering = true;
+         this.__bufferingStartTime = Date.now();
+         this.__bufferingTarget = Math.max(targetBuffer, 2.2);
+@@ -387,6 +395,8 @@ export function ensureJSMpegPatched() {
+           this.audioOut.context.state === "running");
+ 
+       if (!hasAudioClock) {
++        this.__avDrift = null;
++        this.__holdStart = 0;
+         const frameDur = 1 / (this.video.frameRate || 30);
+         if (
+           !this.lastVideoWallTime ||
+@@ -400,54 +410,109 @@ export function ensureJSMpegPatched() {
+       }
+ 
+       const offset = this.syncOffset || 0;
+-      const audibleAudioPts = Math.max(
+-        0,
+-        this.audio.decodedTime - (this.audioOut ? this.audioOut.enqueuedTime : 0)
+-      );
++      const audibleAudioPts =
++        computeAudiblePts(
++          this.audio.decodedTime,
++          this.audioOut ? this.audioOut.enqueuedTime : 0,
++          this.audio.sampleRate
++        ) || 0;
+       const targetAudioPts = audibleAudioPts + offset;
+ 
+       let videoPts = this.video.decodedTime;
+       const frameStep = 1 / (this.video.frameRate || 30);
+-      let nextVideoPts =
++      const peekNextVideoPts = () =>
+         this.video.ptsQueue && this.video.ptsQueue.length > 0
+           ? this.video.ptsQueue[0]
+-          : videoPts > 0
+-            ? videoPts + frameStep
+-            : 0;
++          : videoPts + frameStep;
+ 
+-      // Initial frame or large PTS discontinuity
+-      if (videoPts === 0 || Math.abs(nextVideoPts - targetAudioPts) > 3.0) {
++      // Initial frame after (re)start: show something immediately
++      if (videoPts === 0) {
+         this.video.decode();
++        this.__holdStart = 0;
++        this.__avDrift = null;
+         return;
+       }
+ 
++      let nextVideoPts = peekNextVideoPts();
+       const tolerance = 0.5 * frameStep;
+       const lag = targetAudioPts - nextVideoPts;
+-      const maxCatchupFrames = lag > 0.25 ? 8 : 3;
+-      let decodedCount = 0;
++      let skippedCount = 0;
++      let renderedCount = 0;
++
++      // 6a. Video behind audio: decode frames WITHOUT rendering (P-frames still have to
++      // be decoded, but skipping the YUV upload/draw is what lets slow devices catch up),
++      // within a per-tick time budget (10 ms, 14 ms when the drift monitor boosts it) so a
++      // tick never overruns a 60 Hz frame. Rendering is suppressed by swapping in a no-op
++      // destination (works whether or not the decoder checks `if (this.destination)`);
++      // resize() is forwarded so a sequence-header size change still reaches the renderer.
++      if (lag > AV_SYNC.softThresholdSec) {
++        const boosted = (this.__syncBoostUntil || 0) > Date.now();
++        const budgetSec = (boosted ? 14 : 10) / 1000;
++        const t0 = JSMpeg.Now();
++        const dest = this.video.destination;
++        this.video.destination = {
++          enabled: true,
++          render() {},
++          resize(width, height) {
++            if (dest && dest.resize) dest.resize(width, height);
++          },
++          destroy() {}
++        };
++        try {
++          while (
++            nextVideoPts < targetAudioPts - frameStep &&
++            JSMpeg.Now() - t0 < budgetSec
++          ) {
++            if (!this.video.decode()) break;
++            skippedCount++;
++            videoPts = this.video.decodedTime;
++            nextVideoPts = peekNextVideoPts();
++          }
++        } finally {
++          this.video.destination = dest;
++        }
++        this.__framesSkipped = (this.__framesSkipped || 0) + skippedCount;
++      }
+ 
+-      while (
+-        decodedCount < maxCatchupFrames &&
+-        nextVideoPts <= targetAudioPts + tolerance
+-      ) {
++      // 6b. Normal paced decode (rendered). Video ahead of audio => nothing decoded => hold.
++      while (renderedCount < 3 && nextVideoPts <= targetAudioPts + tolerance) {
+         if (!this.video.decode()) break;
+-        decodedCount++;
++        renderedCount++;
+         videoPts = this.video.decodedTime;
+-        nextVideoPts =
+-          this.video.ptsQueue && this.video.ptsQueue.length > 0
+-            ? this.video.ptsQueue[0]
+-            : videoPts + frameStep;
++        nextVideoPts = peekNextVideoPts();
+       }
++
++      // 6c. Hold safety: if the audio clock looks valid but video has been held for a
++      // long time (audio stalled / bogus PTS), free-run at frame rate instead of freezing.
++      // The drift monitor in DriveVideoPlayer will hard-resync well before this matters.
++      if (skippedCount + renderedCount > 0) {
++        this.__holdStart = 0;
++        this.lastVideoWallTime = now;
++      } else if (lag < -tolerance) {
++        if (!this.__holdStart) this.__holdStart = now;
++        if (
++          now - this.__holdStart > 2.5 &&
++          now - (this.lastVideoWallTime || 0) >= frameStep - 0.004
++        ) {
++          if (this.video.decode()) this.lastVideoWallTime = now;
++        }
++      }
++
++      this.__avDrift = this.video.decodedTime - targetAudioPts;
++      this.__avDriftAt = Date.now();
+     };
+   }
+ 
+-  JSMpeg.__tylertubePatchedV3 = true;
++  JSMpeg.__tylertubePatchedV4 = true;
+   return JSMpeg;
+ }
+ 
+ export function flushPlayerBuffers(player) {
+   if (!player) return;
+   player.__bufferedAhead = 0;
++  player.__avDrift = null;
++  player.__holdStart = 0;
++  player.lastVideoWallTime = 0;
+   if (player.demuxer) {
+     player.demuxer.leftoverBytes = null;
+     player.demuxer.bits = null;
+diff --git a/src/styles/drive-player.css b/src/styles/drive-player.css
+index 9f8cbbe..21503fa 100644
+--- a/src/styles/drive-player.css
++++ b/src/styles/drive-player.css
+@@ -588,6 +588,10 @@
+     gap: 4px;
+ }
+ 
++.yt-chip-row + .yt-chip-row {
++    margin-top: 4px;
++}
++
+ .yt-chip {
+     flex: 1;
+     min-width: 44px;
+@@ -613,6 +617,14 @@
+     color: #fff;
+ }
+ 
++.yt-chip:disabled,
++.yt-chip:disabled:hover {
++    opacity: 0.4;
++    cursor: default;
++    background: rgba(255, 255, 255, 0.08);
++    color: #ccc;
++}
++
+ .yt-menu-toggle {
+     display: flex;
+     justify-content: space-between;
+diff --git a/tests/drive-sync.test.js b/tests/drive-sync.test.js
+new file mode 100644
+index 0000000..ae2e818
+--- /dev/null
++++ b/tests/drive-sync.test.js
+@@ -0,0 +1,217 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import {
++  AV_SYNC,
++  MP2_FRAME_SAMPLES,
++  anchorAvSync,
++  computeAudiblePts,
++  computeAvDrift,
++  computeResyncTarget,
++  createAvSyncState,
++  evaluateAvSync
++} from "../src/components/drive/driveUtils.js";
++import { buildAtempoChain, buildDriveFfmpegArgs } from "../server/drive-ws.js";
++
++const FRAME = MP2_FRAME_SAMPLES / 44100;
++const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
++
++test("computeAudiblePts adds one MP2 frame and subtracts queued audio", () => {
++  close(computeAudiblePts(10, 0.4, 44100), 10 + FRAME - 0.4);
++  close(computeAudiblePts(10, 0, 48000), 10 + 1152 / 48000);
++  close(computeAudiblePts(10, -1, undefined), 10 + FRAME);
++  assert.equal(computeAudiblePts(0, 0.1, 44100), null);
++  assert.equal(computeAudiblePts(NaN, 0.1, 44100), null);
++  assert.equal(computeAudiblePts(0.01, 5, 44100), 0);
++});
++
++test("computeAvDrift: positive = video ahead, includes user offset", () => {
++  const heard = 10 + FRAME - 0.4;
++  close(computeAvDrift({ videoPts: heard + 0.2, audioPts: 10, audioQueuedSec: 0.4, sampleRate: 44100 }), 0.2);
++  close(computeAvDrift({ videoPts: heard - 0.3, audioPts: 10, audioQueuedSec: 0.4 }), -0.3);
++  close(computeAvDrift({ videoPts: heard + 0.1, audioPts: 10, audioQueuedSec: 0.4, syncOffset: 0.1 }), 0);
++  assert.equal(computeAvDrift({ videoPts: 0, audioPts: 10 }), null);
++  assert.equal(computeAvDrift({ videoPts: 5, audioPts: 0 }), null);
++});
++
++test("evaluateAvSync: inactive and grace period never act", () => {
++  let s = createAvSyncState(0);
++  let r = evaluateAvSync(s, { drift: 5, active: false }, 10000);
++  assert.equal(r.action, "none");
++  assert.equal(r.reason, "inactive");
++  s = anchorAvSync(r.state, 10000);
++  r = evaluateAvSync(s, { drift: 5, active: true }, 10000 + AV_SYNC.graceMs - 1);
++  assert.equal(r.action, "none");
++  assert.equal(r.reason, "grace");
++  r = evaluateAvSync(s, { drift: null, active: true }, 99999);
++  assert.equal(r.action, "none");
++});
++
++test("evaluateAvSync: small drift is in sync, medium drift is soft", () => {
++  const s = createAvSyncState(0);
++  const now = AV_SYNC.graceMs + 1;
++  assert.equal(evaluateAvSync(s, { drift: 0.1, active: true }, now).reason, "in-sync");
++  assert.equal(evaluateAvSync(s, { drift: -0.12, active: true }, now).action, "none");
++  const ahead = evaluateAvSync(s, { drift: 0.3, active: true }, now);
++  assert.equal(ahead.action, "soft");
++  assert.equal(ahead.reason, "video-ahead");
++  assert.equal(evaluateAvSync(s, { drift: -0.3, active: true }, now).reason, "video-behind");
++});
++
++const T0 = AV_SYNC.graceMs + 1;
++const step = AV_SYNC.monitorIntervalMs;
++
++// Feed n samples; returns the last result.
++function feed(state, n, now, sampleAt) {
++  let r = { state };
++  for (let i = 0; i < n; i++) {
++    r = evaluateAvSync(r.state, sampleAt(i), now + i * step);
++  }
++  return { ...r, now: now + (n - 1) * step };
++}
++
++test("evaluateAvSync: large drift resyncs immediately", () => {
++  const r = evaluateAvSync(createAvSyncState(0), { drift: -1.5, active: true }, T0);
++  assert.equal(r.action, "hard");
++  assert.equal(r.reason, "large-drift");
++  assert.deepEqual(r.state.hardResyncTimes, [T0]);
++  assert.equal(r.state.anchorAt, T0);
++  assert.equal(r.state.lastHardDirection, -1);
++  // Right after a hard resync the grace period applies.
++  assert.equal(evaluateAvSync(r.state, { drift: 2, active: true }, T0 + 100).reason, "grace");
++});
++
++test("evaluateAvSync: persistent video-ahead drift escalates; in-sync resets the streak", () => {
++  const n = AV_SYNC.softPersistSamples;
++  let r = feed(createAvSyncState(0), n - 1, T0, () => ({ drift: 0.3, active: true }));
++  assert.equal(r.action, "soft");
++  assert.equal(r.reason, "video-ahead");
++  const ok = evaluateAvSync(r.state, { drift: 0.01, active: true }, r.now + step);
++  assert.equal(ok.state.outOfSyncSamples, 0);
++  r = evaluateAvSync(r.state, { drift: 0.3, active: true }, r.now + step);
++  assert.equal(r.action, "hard");
++  assert.equal(r.reason, "persistent-video-ahead");
++});
++
++test("evaluateAvSync: persistent video-behind stays soft while frames are being skipped", () => {
++  const n = AV_SYNC.softPersistSamples;
++  // Drift constant (slow decoder) but skip count rising -> restart wouldn't help.
++  const r = feed(createAvSyncState(0), n * 4, T0, (i) => ({
++    drift: -0.4,
++    active: true,
++    framesSkipped: i * 5
++  }));
++  assert.notEqual(r.action, "hard");
++  assert.ok(r.state.hardResyncTimes.length === 0, "no hard resync");
++  const at = evaluateAvSync(
++    feed(createAvSyncState(0), n - 1, T0, (i) => ({ drift: -0.4, active: true, framesSkipped: i })).state,
++    { drift: -0.4, active: true, framesSkipped: n },
++    T0 + n * step
++  );
++  assert.equal(at.action, "soft");
++  assert.equal(at.reason, "catching-up");
++});
++
++test("evaluateAvSync: persistent video-behind stays soft while drift is shrinking", () => {
++  const r = feed(createAvSyncState(0), AV_SYNC.softPersistSamples * 3, T0, (i) => ({
++    drift: -0.9 + i * 0.03,
++    active: true,
++    framesSkipped: 0
++  }));
++  assert.equal(r.state.hardResyncTimes.length, 0);
++});
++
++test("evaluateAvSync: persistent video-behind with no progress escalates", () => {
++  const n = AV_SYNC.softPersistSamples;
++  const r = feed(createAvSyncState(0), n, T0, () => ({
++    drift: -0.4,
++    active: true,
++    framesSkipped: 7
++  }));
++  assert.equal(r.action, "hard");
++  assert.equal(r.reason, "persistent-video-behind");
++});
++
++test("evaluateAvSync: back-off when a hard resync didn't help (same direction soon after)", () => {
++  let r = evaluateAvSync(createAvSyncState(0), { drift: 1.5, active: true }, T0);
++  assert.equal(r.action, "hard");
++  // Drift is back in the same direction right after grace -> disable auto-hard.
++  r = evaluateAvSync(r.state, { drift: 1.5, active: true }, T0 + AV_SYNC.graceMs + 1);
++  assert.equal(r.action, "soft");
++  assert.equal(r.reason, "hard-backoff");
++  assert.equal(r.state.autoHardDisabled, true);
++  // Stays soft for the rest of the stream, even much later.
++  r = evaluateAvSync(r.state, { drift: 1.5, active: true }, T0 + 10 * AV_SYNC.hardWindowMs);
++  assert.equal(r.action, "soft");
++  assert.equal(r.reason, "auto-hard-disabled");
++  // A new stream (fresh state) re-enables it.
++  assert.equal(evaluateAvSync(createAvSyncState(0), { drift: 1.5, active: true }, T0).action, "hard");
++});
++
++test("evaluateAvSync: opposite direction is not back-off, but cooldown applies", () => {
++  let r = evaluateAvSync(createAvSyncState(0), { drift: 1.5, active: true }, T0);
++  r = evaluateAvSync(r.state, { drift: -1.5, active: true }, T0 + AV_SYNC.graceMs + 1);
++  assert.equal(r.action, "soft");
++  assert.equal(r.reason, "hard-cooldown");
++  assert.equal(r.state.autoHardDisabled, false);
++});
++
++test("evaluateAvSync: hard resyncs are capped per window", () => {
++  let s = createAvSyncState(0);
++  let now = T0;
++  const gap = AV_SYNC.backoffWindowMs + 1; // far enough apart to not trigger back-off
++  for (let i = 0; i < AV_SYNC.maxHardPerWindow; i++) {
++    const r = evaluateAvSync(s, { drift: 2, active: true }, now);
++    assert.equal(r.action, "hard");
++    s = r.state;
++    now += gap;
++  }
++  let r = evaluateAvSync(s, { drift: 2, active: true }, now);
++  assert.equal(r.action, "soft");
++  assert.equal(r.reason, "hard-limit");
++  // Once old resyncs leave the window, hard is allowed again.
++  r = evaluateAvSync(r.state, { drift: 2, active: true }, now + AV_SYNC.hardWindowMs);
++  assert.equal(r.action, "hard");
++});
++
++test("computeResyncTarget maps the heard audio PTS to media time (no queue subtraction)", () => {
++  const base = { seekBase: 100, firstPts: 1.0, speed: 1, duration: 0, fallback: 50 };
++  close(computeResyncTarget({ ...base, heardPts: 11.0 }), 110);
++  close(computeResyncTarget({ ...base, heardPts: 11.0, speed: 2 }), 120);
++  close(computeResyncTarget({ ...base, heardPts: 11.0, duration: 105 }), 104.9);
++  // Unusable audio clock -> fallback.
++  close(computeResyncTarget({ ...base, heardPts: NaN }), 50);
++  close(computeResyncTarget({ ...base, heardPts: 0.5 }), 50);
++  close(computeResyncTarget({ ...base, heardPts: 11, firstPts: null }), 50);
++  close(computeResyncTarget({ heardPts: NaN }), 0);
++});
++
++test("buildAtempoChain keeps each atempo within 0.5..2", () => {
++  assert.deepEqual(buildAtempoChain(1), []);
++  assert.deepEqual(buildAtempoChain(1.005), []);
++  assert.deepEqual(buildAtempoChain(1.5), ["atempo=1.5"]);
++  assert.deepEqual(buildAtempoChain(0.5), ["atempo=0.5"]);
++  assert.deepEqual(buildAtempoChain(0.25), ["atempo=0.5", "atempo=0.5"]);
++  assert.deepEqual(buildAtempoChain(4), ["atempo=2.0", "atempo=2"]);
++  assert.deepEqual(buildAtempoChain(NaN), []);
++});
++
++test("buildDriveFfmpegArgs aligns A/V start and keeps CFR output", () => {
++  const args = buildDriveFfmpegArgs({ input: "/v/a.mp4", seek: 12.5, speed: 1, quality: 480 });
++  const at = (flag) => args[args.indexOf(flag) + 1];
++  assert.equal(at("-ss"), "12.500");
++  assert.ok(args.indexOf("-ss") < args.indexOf("-i"), "-ss must be an input option");
++  assert.equal(at("-i"), "/v/a.mp4");
++  assert.equal(at("-vf"), "fps=fps=30:start_time=0,scale=854:480");
++  assert.equal(args.indexOf("-fps_mode"), -1, "no -fps_mode (needs ffmpeg >= 5.1)");
++  assert.equal(at("-af"), "aresample=44100:async=1000:first_pts=0");
++  assert.equal(at("-b:v"), "900k");
++  assert.equal(args[args.length - 1], "-");
++
++  const fast = buildDriveFfmpegArgs({ input: "x", seek: 0, speed: 1.5, quality: 1080 });
++  const fat = (flag) => fast[fast.indexOf(flag) + 1];
++  assert.equal(fast.indexOf("-ss"), -1);
++  assert.equal(fat("-vf"), "setpts=PTS/1.5,fps=fps=30:start_time=0,scale=1920:1080");
++  // Resample/align before atempo so both tracks scale from the same origin.
++  assert.equal(fat("-af"), "aresample=44100:async=1000:first_pts=0,atempo=1.5");
++  assert.equal(fat("-b:v"), "2600k");
++});

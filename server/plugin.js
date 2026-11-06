@@ -27,7 +27,6 @@ export function videoCatalogPlugin() {
       if (!fs.existsSync(distDir)) return;
 
       const assetsToCopy = [
-        "jsmpeg.min.js",
         "favicon.svg",
         "favicon.ico",
         "favicon-16x16.png",

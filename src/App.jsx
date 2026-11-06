@@ -8,6 +8,7 @@ import FavoritesPage from "./components/FavoritesPage";
 import { VIDEO_LIBRARY } from "./data/videos";
 import { COLOR_THEMES } from "./data/themeColors";
 import { readJSON, writeString, writeJSON, removeKey } from "./lib/storage";
+import { isWebCodecsSupported } from "./components/webcodecs/protocol";
 
 const STORAGE_KEY = "tylertube_watch_progress";
 const FAVORITES_STORAGE_KEY = "tylertube_favorites";
@@ -110,7 +111,10 @@ export default function App() {
   const [selectedSection, setSelectedSection] = useState("ALL");
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isSidePlayer, setIsSidePlayer] = useState(false);
-  const [playerMode, setPlayerMode] = useState("standard");
+  // playerMode: "webcodecs" (default where VideoDecoder exists) | "standard" (Plyr).
+  const [playerMode, setPlayerMode] = useState(() =>
+    isWebCodecsSupported() ? "webcodecs" : "standard"
+  );
   const [viewMode, setViewMode] = useState(() => {
     const initial = detectInitialViewMode();
     if (typeof document !== "undefined") {
@@ -489,13 +493,14 @@ export default function App() {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }, []);
 
-  // playerMode: "standard" | "drive" | "webcodecs". D toggles standard ↔ drive; from
-  // webcodecs (picked via its button in VideoPlayer) D returns to standard.
+  // D / player buttons toggle standard ↔ webcodecs (webcodecs only where supported).
   const togglePlayerMode = useCallback(() => {
-    setPlayerMode((prev) => (prev === "standard" ? "drive" : "standard"));
+    setPlayerMode((prev) =>
+      prev === "standard" && isWebCodecsSupported() ? "webcodecs" : "standard"
+    );
   }, []);
 
-  // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player, 'M' for Mobile/Desktop View, 'D' for Drive Player when not typing in inputs
+  // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player, 'M' for Mobile/Desktop View, 'D' for Standard/WebCodecs Player when not typing in inputs
   useEffect(() => {
     const handleKeyDown = (e) => {
       const tag = document.activeElement?.tagName?.toLowerCase();
@@ -530,7 +535,6 @@ export default function App() {
         playerMode={playerMode}
         onTogglePlayerMode={togglePlayerMode}
         viewMode={viewMode}
-        onViewModeChange={handleViewModeChange}
         theme={theme}
         onToggleTheme={toggleTheme}
         colorTheme={colorTheme}
@@ -585,7 +589,6 @@ export default function App() {
           viewMode={viewMode}
           playerMode={playerMode}
           onTogglePlayerMode={togglePlayerMode}
-          onSetPlayerMode={setPlayerMode}
           onToggleTheater={toggleTheaterMode}
         />
 

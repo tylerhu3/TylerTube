@@ -1,9 +1,9 @@
-// Settings popup for the Drive player (presentational; state lives in DriveVideoPlayer).
+// Settings popup for the WebCodecs player (presentational; state lives in WebCodecsPlayer).
 import React from "react";
 import { APP_VERSION } from "../../version";
-import { SPEED_OPTIONS, QUALITY_OPTIONS, BUFFER_OPTIONS } from "./driveUtils";
+import { SPEED_OPTIONS, QUALITY_OPTIONS, BUFFER_OPTIONS } from "./playerUtils";
 
-export default function DriveSettingsMenu({
+export default function SettingsMenu({
   menuRef,
   open,
   playbackSpeed,

@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import Plyr from "plyr";
 import "plyr/dist/plyr.css";
-import DriveVideoPlayer from "./DriveVideoPlayer";
 import WebCodecsPlayer from "./WebCodecsPlayer";
 import { isWebCodecsSupported } from "./webcodecs/protocol";
+import { nextVolumeBoost } from "../utils/audioBoost";
 
 function srtToVtt(srtText) {
   const normalized = srtText
@@ -92,17 +92,21 @@ export default function VideoPlayer({
   viewMode = "desktop",
   playerMode = "standard",
   onTogglePlayerMode,
-  onSetPlayerMode,
   onToggleTheater
 }) {
-  const isDriveMode = playerMode === "drive";
+  // WebCodecs mode hides Plyr and shows the canvas player (exposes seekTo/skipBy).
   const isWebCodecsMode = playerMode === "webcodecs";
-  // Drive and WebCodecs both replace Plyr with a canvas player exposing seekTo/skipBy.
-  const isCanvasMode = isDriveMode || isWebCodecsMode;
+  const isCanvasMode = isWebCodecsMode;
   const webCodecsSupported = isWebCodecsSupported();
+  // Exact last position reported by whichever player is active ({ videoId, time }). Both
+  // players save to the same watch-progress store; this hands the precise (sub-second)
+  // position across a Standard ⇄ WebCodecs switch.
+  const positionRef = useRef({ videoId: null, time: 0 });
+  const isCanvasModeRef = useRef(isCanvasMode);
+  const recordPlyrProgressRef = useRef(null);
   const containerRef = useRef(null);
   const playerRef = useRef(null);
-  const drivePlayerRef = useRef(null);
+  const canvasPlayerRef = useRef(null);
   const sectionRef = useRef(null);
   const onEndedRef = useRef(onEnded);
   const onTimeUpdateRef = useRef(onTimeUpdate);
@@ -115,6 +119,49 @@ export default function VideoPlayer({
   const [resumedBannerTime, setResumedBannerTime] = useState(0);
   const [isInteracting, setIsInteracting] = useState(false);
   const dragStateRef = useRef(null);
+  // Standard-player volume boost (>100%): Plyr's <video> → MediaElementSource → GainNode.
+  // The graph is built lazily on the first boost so unboosted playback never touches Web
+  // Audio. Plyr swaps in a new <video> on each source change, so the source node is
+  // re-created per element; once routed, audio only plays while the AudioContext runs.
+  const [volumeBoost, setVolumeBoost] = useState(1);
+  const volumeBoostRef = useRef(1);
+  const boostGraphRef = useRef(null); // { ctx, gain, media, source }
+
+  const syncBoostGraph = (create = false) => {
+    const media = playerRef.current?.media;
+    let graph = boostGraphRef.current;
+    if (!graph) {
+      const Ctx = typeof window !== "undefined" && (window.AudioContext || window.webkitAudioContext);
+      if (!create || !Ctx || !media) return;
+      const ctx = new Ctx();
+      const gain = ctx.createGain();
+      gain.connect(ctx.destination);
+      graph = boostGraphRef.current = { ctx, gain, media: null, source: null };
+    }
+    if (media && graph.media !== media) {
+      try {
+        graph.source?.disconnect();
+      } catch {
+        // Already disconnected
+      }
+      try {
+        graph.source = graph.ctx.createMediaElementSource(media);
+        graph.source.connect(graph.gain);
+        graph.media = media;
+      } catch {
+        // Element already routed elsewhere; leave it at native volume
+      }
+    }
+    graph.gain.gain.value = volumeBoostRef.current;
+    if (graph.ctx.state === "suspended") graph.ctx.resume().catch(() => {});
+  };
+
+  const handleCycleBoost = () => {
+    const next = nextVolumeBoost(volumeBoostRef.current);
+    volumeBoostRef.current = next;
+    setVolumeBoost(next);
+    syncBoostGraph(next > 1);
+  };
 
   useEffect(() => {
     onEndedRef.current = onEnded;
@@ -163,6 +210,7 @@ export default function VideoPlayer({
 
     const recordProgress = (options = {}) => {
       if (
+        isCanvasModeRef.current ||
         !isReadyToRecordRef.current ||
         isRestoringSeekRef.current ||
         !onTimeUpdateRef.current ||
@@ -179,6 +227,7 @@ export default function VideoPlayer({
       // During normal playback timeupdate, ignore 0s before actual progress unless forced (e.g., manual seek to 0)
       if (!options.force && currentTime <= 0) return;
 
+      positionRef.current = { videoId: loadedVideoIdRef.current, time: currentTime };
       onTimeUpdateRef.current(
         loadedVideoIdRef.current,
         currentTime,
@@ -188,6 +237,7 @@ export default function VideoPlayer({
     };
 
     player.on("play", () => {
+      syncBoostGraph(); // resume the AudioContext / route a fresh <video> if boost is active
       if (isRestoringSeekRef.current) return;
       recordProgress({ force: true, played: true });
     });
@@ -228,6 +278,7 @@ export default function VideoPlayer({
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     playerRef.current = player;
+    recordPlyrProgressRef.current = recordProgress;
 
     return () => {
       handleVisibilityOrUnload();
@@ -237,7 +288,10 @@ export default function VideoPlayer({
       player.destroy();
       container.innerHTML = "";
       playerRef.current = null;
+      boostGraphRef.current?.ctx.close().catch(() => {});
+      boostGraphRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update video source whenever selected video changes
@@ -326,6 +380,7 @@ export default function VideoPlayer({
       };
 
       loadedVideoIdRef.current = video.id;
+      syncBoostGraph(); // Plyr made a new <video>; re-route it if boost is active
       activeMediaEl = player.media;
       if (activeMediaEl) {
         activeMediaEl.preload = "metadata";
@@ -432,8 +487,8 @@ export default function VideoPlayer({
   }, [video]);
 
   const handleRestartFromBeginning = () => {
-    if (isCanvasMode && drivePlayerRef.current) {
-      drivePlayerRef.current.seekTo(0);
+    if (isCanvasMode && canvasPlayerRef.current) {
+      canvasPlayerRef.current.seekTo(0);
     }
     const player = playerRef.current;
     if (player && player.media) {
@@ -448,8 +503,8 @@ export default function VideoPlayer({
   };
 
   const handleJumpToSavedTime = (targetTime) => {
-    if (isCanvasMode && drivePlayerRef.current && targetTime > 0) {
-      drivePlayerRef.current.seekTo(targetTime);
+    if (isCanvasMode && canvasPlayerRef.current && targetTime > 0) {
+      canvasPlayerRef.current.seekTo(targetTime);
       return;
     }
     const player = playerRef.current;
@@ -466,16 +521,16 @@ export default function VideoPlayer({
   };
 
   const handleRewind = () => {
-    if (isCanvasMode && drivePlayerRef.current) {
-      drivePlayerRef.current.skipBy(-10);
+    if (isCanvasMode && canvasPlayerRef.current) {
+      canvasPlayerRef.current.skipBy(-10);
       return;
     }
     playerRef.current?.rewind(10);
   };
 
   const handleForward = () => {
-    if (isCanvasMode && drivePlayerRef.current) {
-      drivePlayerRef.current.skipBy(10);
+    if (isCanvasMode && canvasPlayerRef.current) {
+      canvasPlayerRef.current.skipBy(10);
       return;
     }
     playerRef.current?.forward(10);
@@ -622,10 +677,84 @@ export default function VideoPlayer({
   };
 
   useEffect(() => {
-    if ((isHidden || isCanvasMode) && playerRef.current && !playerRef.current.paused) {
+    if (isHidden && playerRef.current && !playerRef.current.paused) {
       playerRef.current.pause();
     }
-  }, [isHidden, isCanvasMode]);
+  }, [isHidden]);
+
+  // Standard ⇄ WebCodecs handoff. Into WebCodecs: save Plyr's exact position, then mute its
+  // progress reporting (a hidden, idle Plyr must not overwrite the canvas player's progress).
+  // Back to Standard: the canvas player saved its exact position on unmount (its effect
+  // cleanup runs before this effect); seek the paused Plyr there.
+  useEffect(() => {
+    const wasCanvas = isCanvasModeRef.current;
+    if (wasCanvas === isCanvasMode) return;
+    const player = playerRef.current;
+    if (isCanvasMode) {
+      recordPlyrProgressRef.current?.({ force: true });
+      isCanvasModeRef.current = true;
+      if (player && !player.paused) player.pause();
+      return;
+    }
+    isCanvasModeRef.current = false;
+    const pos = positionRef.current;
+    const media = player?.media;
+    if (
+      !player ||
+      !media ||
+      !video ||
+      pos.videoId !== video.id ||
+      loadedVideoIdRef.current !== video.id ||
+      !isReadyToRecordRef.current ||
+      !(media.readyState >= 1)
+    ) {
+      return;
+    }
+    const duration = Number(player.duration || media.duration || 0);
+    const target =
+      duration > 0 ? Math.min(Math.max(0, pos.time), Math.max(0, duration - 0.5)) : pos.time;
+    if (Math.abs(media.currentTime - target) < 0.05) return;
+    isRestoringSeekRef.current = true;
+    const done = () => {
+      isRestoringSeekRef.current = false;
+      syncPlyrProgressUI(player);
+    };
+    media.addEventListener("seeked", done, { once: true });
+    setTimeout(() => {
+      if (isRestoringSeekRef.current) done();
+    }, 400);
+    try {
+      player.currentTime = target;
+      if (Math.abs(media.currentTime - target) > 0.5) media.currentTime = target;
+    } catch {
+      done();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCanvasMode]);
+
+  // Canvas player reports go through here so positionRef stays exact.
+  const handleCanvasTimeUpdate = (videoId, time, duration, options) => {
+    positionRef.current = { videoId, time };
+    onTimeUpdate?.(videoId, time, duration, options);
+  };
+  // Where the canvas player should start. Called from its stream effect, which runs before
+  // this component's effects, so on a Standard → WebCodecs switch Plyr is still live here.
+  // null → the canvas player falls back to its own savedTime prop.
+  const getCanvasStartTime = () => {
+    if (!video) return null;
+    const player = playerRef.current;
+    if (
+      !isCanvasModeRef.current &&
+      player &&
+      loadedVideoIdRef.current === video.id &&
+      isReadyToRecordRef.current &&
+      Number(player.currentTime) > 0
+    ) {
+      return Number(player.currentTime);
+    }
+    const pos = positionRef.current;
+    return pos.videoId === video.id && pos.time > 0 ? pos.time : null;
+  };
 
   const floatingStyle = isSidePlayer
     ? {
@@ -777,28 +906,14 @@ export default function VideoPlayer({
         style={isCanvasMode ? { display: "none" } : undefined}
       />
 
-      {isDriveMode && (
-        <div className="video-wrapper drive-mode-wrapper">
-          <DriveVideoPlayer
-            ref={drivePlayerRef}
-            video={video}
-            savedTime={savedTime}
-            onTimeUpdate={onTimeUpdate}
-            onEnded={onEnded}
-            isHidden={isHidden}
-            onToggleTheater={onToggleTheater}
-            onSwitchToStandard={onTogglePlayerMode}
-          />
-        </div>
-      )}
-
       {isWebCodecsMode && (
         <div className="video-wrapper drive-mode-wrapper">
           <WebCodecsPlayer
-            ref={drivePlayerRef}
+            ref={canvasPlayerRef}
             video={video}
             savedTime={savedTime}
-            onTimeUpdate={onTimeUpdate}
+            getStartTime={getCanvasStartTime}
+            onTimeUpdate={handleCanvasTimeUpdate}
             onEnded={onEnded}
             isHidden={isHidden}
             onToggleTheater={onToggleTheater}
@@ -848,36 +963,18 @@ export default function VideoPlayer({
           {onTogglePlayerMode && (
             <button
               type="button"
-              className={`ctrl-btn drive-switch-btn ${isDriveMode ? "active" : ""}`}
-              onClick={
-                onSetPlayerMode
-                  ? () => onSetPlayerMode(isDriveMode ? "standard" : "drive")
-                  : onTogglePlayerMode
-              }
-              title={
-                isDriveMode
-                  ? "Switch back to Standard Video Player (D)"
-                  : "Switch to Tesla Drive MPEG1 Video Player (D)"
-              }
-            >
-              {isDriveMode ? "🎬 Standard Player" : "🚗 Drive Player"}
-            </button>
-          )}
-          {onSetPlayerMode && (
-            <button
-              type="button"
-              className={`ctrl-btn drive-switch-btn webcodecs-switch-btn ${isWebCodecsMode ? "active" : ""}`}
-              onClick={() => onSetPlayerMode(isWebCodecsMode ? "standard" : "webcodecs")}
+              className={`ctrl-btn webcodecs-switch-btn ${isWebCodecsMode ? "active" : ""}`}
+              onClick={onTogglePlayerMode}
               disabled={!webCodecsSupported && !isWebCodecsMode}
               title={
                 !webCodecsSupported
                   ? "WebCodecs player unavailable: this browser has no VideoDecoder"
                   : isWebCodecsMode
-                    ? "Switch back to Standard Video Player (D)"
-                    : "Switch to WebCodecs H.264 canvas player (audio-clocked)"
+                    ? "Switch to Standard Video Player (D)"
+                    : "Switch to WebCodecs Video Player (D)"
               }
             >
-              {isWebCodecsMode ? "🎬 Standard Player" : "⚡ WebCodecs"}
+              {isWebCodecsMode ? "🎬 Standard Player" : "⚡ WebCodecs Player"}
             </button>
           )}
           <button
@@ -912,6 +1009,16 @@ export default function VideoPlayer({
           >
             Next ⏭
           </button>
+          {!isWebCodecsMode && (
+            <button
+              type="button"
+              className={`ctrl-btn ${volumeBoost > 1 ? "active" : ""}`}
+              onClick={handleCycleBoost}
+              title="Volume boost: multiplies the player volume (cycles 100% → 150% → 200% → 300%)"
+            >
+              🔊 Boost {Math.round(volumeBoost * 100)}%
+            </button>
+          )}
           {video?.id && onToggleFavorite && (
             <button
               type="button"

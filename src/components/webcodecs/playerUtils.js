@@ -1,8 +1,8 @@
-// Drive player constants and pure helpers (no React, unit-tested in tests/).
+// WebCodecs player constants and pure helpers (no React, unit-tested in tests/).
 export const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 export const QUALITY_OPTIONS = [360, 480, 720, 1080];
 
-export function formatDriveTime(sec) {
+export function formatPlayerTime(sec) {
   if (!Number.isFinite(sec) || sec < 0) sec = 0;
   sec = Math.floor(sec);
   const h = Math.floor(sec / 3600);

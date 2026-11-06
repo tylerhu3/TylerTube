@@ -1,16 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatDriveTime, BUFFER_OPTIONS } from "../src/components/drive/driveUtils.js";
+import { formatPlayerTime, BUFFER_OPTIONS } from "../src/components/webcodecs/playerUtils.js";
 
-test("formatDriveTime", () => {
-  assert.equal(formatDriveTime(0), "0:00");
-  assert.equal(formatDriveTime(65.9), "1:05");
-  assert.equal(formatDriveTime(3600 + 62), "1:01:02");
-  assert.equal(formatDriveTime(-5), "0:00");
-  assert.equal(formatDriveTime(NaN), "0:00");
+test("formatPlayerTime", () => {
+  assert.equal(formatPlayerTime(0), "0:00");
+  assert.equal(formatPlayerTime(65.9), "1:05");
+  assert.equal(formatPlayerTime(3600 + 62), "1:01:02");
+  assert.equal(formatPlayerTime(-5), "0:00");
+  assert.equal(formatPlayerTime(NaN), "0:00");
 });
 
-test("BUFFER_OPTIONS targets match DriveVideoPlayer's bufferMode mapping", () => {
+test("BUFFER_OPTIONS targets match the player's bufferMode mapping", () => {
   assert.deepEqual(BUFFER_OPTIONS.map((o) => o.target), [1.0, 2.0, 5.0]);
 });
 
@@ -42,4 +42,13 @@ test("storage helpers never throw and round-trip", () => {
   assert.equal(readString("a", "f"), "f");
   assert.doesNotThrow(() => { writeJSON("a", 1); writeString("a", "1"); removeKey("a"); });
   delete globalThis.localStorage;
+});
+
+import { VOLUME_BOOST_STEPS, nextVolumeBoost } from "../src/utils/audioBoost.js";
+test("nextVolumeBoost cycles through the steps and wraps", () => {
+  assert.deepEqual(VOLUME_BOOST_STEPS, [1, 1.5, 2, 3]);
+  assert.equal(nextVolumeBoost(1), 1.5);
+  assert.equal(nextVolumeBoost(2), 3);
+  assert.equal(nextVolumeBoost(3), 1);
+  assert.equal(nextVolumeBoost(1.25), 1);
 });

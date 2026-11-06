@@ -125,11 +125,6 @@
     flex-wrap: nowrap;
 }
 
-[data-view-mode="mobile"] .view-mode-btn {
-    padding: 0.28rem 0.55rem;
-    font-size: 0.75rem;
-}
-
 [data-view-mode="mobile"] .btn-secondary {
     padding: 0.4rem 0.62rem;
     font-size: 0.78rem;
@@ -315,10 +310,6 @@
 }
 
 @media (max-width: 640px) {
-    [data-view-mode="mobile"] .view-mode-label {
-        font-size: 0.72rem;
-    }
-
     [data-view-mode="desktop"] .navbar {
         padding: 0.6rem 0.85rem;
     }

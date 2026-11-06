@@ -1,7 +1,7 @@
-// WebSocket /ws/mpeg1?file=&quality=&seek=&speed=&loop=: ffmpeg → MPEG1 for the JSMpeg Drive player.
-// Client side: src/components/DriveVideoPlayer.jsx. Message formats must change together.
-// With &codec=webcodecs the same socket carries H.264 + PCM binary frames for
-// src/components/WebCodecsPlayer.jsx instead (format: server/webcodecs-stream.js).
+// WebSocket /ws/mpeg1?file=&quality=&seek=&speed=&loop=: ffmpeg → H.264 + PCM binary frames for
+// src/components/WebCodecsPlayer.jsx (format: server/webcodecs-stream.js). The path name is
+// historical (it used to carry MPEG1 for JSMpeg); kept so the Nginx proxy config needn't change.
+// Client and server message formats must change together.
 // Returns the WebSocketServer (null without httpServer); terminating its clients kills their ffmpeg.
 import { spawn } from "node:child_process";
 import { WebSocketServer } from "ws";
@@ -58,7 +58,6 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     const initialSpeed = parseFloat(params.get("speed") || "1") || 1;
     const initialLoop =
       params.get("loop") === "1" || params.get("loop") === "true";
-    const isWebCodecs = params.get("codec") === "webcodecs";
 
     const qualMap = {
       360: "640:360",
@@ -93,17 +92,14 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     if (duration > 0 && currentSeek >= duration - 0.5) {
       currentSeek = 0;
     }
-    const hasAudio = isWebCodecs ? probeHasAudioStream(localFile) : true;
-    // Extra meta/reset fields for the WebCodecs client (absent in MPEG1 mode).
-    const webCodecsInfo = () =>
-      isWebCodecs
-        ? {
-            transport: "webcodecs",
-            videoCodec: webCodecsVideoParams(currentQuality).codec,
-            hasAudio,
-            fps: WC_FPS
-          }
-        : {};
+    const hasAudio = probeHasAudioStream(localFile);
+    // Stream info sent with every meta/reset.
+    const webCodecsInfo = () => ({
+      transport: "webcodecs",
+      videoCodec: webCodecsVideoParams(currentQuality).codec,
+      hasAudio,
+      fps: WC_FPS
+    });
 
     function sendJson(payload) {
       if (!wsClosed && ws.readyState === 1) {
@@ -160,216 +156,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     function doStream(streamUrl, isReset) {
       killActiveFfmpeg();
       if (wsClosed) return;
-      if (isWebCodecs) {
-        doStreamWebCodecs(streamUrl, isReset);
-        return;
-      }
-
-      const scale = qualMap[currentQuality] || "1280:720";
-      const bitrate = scale.endsWith("360")
-        ? "600k"
-        : scale.endsWith("480")
-          ? "900k"
-          : scale.endsWith("720")
-            ? "1600k"
-            : "2600k";
-      const spd = currentSpeed;
-
-      if (isReset) {
-        sendJson({
-          type: "reset",
-          seekTime: currentSeek,
-          duration,
-          speed: spd,
-          quality: currentQuality,
-          paused: isPaused,
-          loop: loopEnabled
-        });
-      } else {
-        sendJson({ type: "status", message: "Starting MPEG1 stream..." });
-      }
-
-      try {
-        const inputArgs = [];
-        if (currentSeek > 0) {
-          inputArgs.push("-ss", currentSeek.toFixed(3));
-        }
-        // Buffer-ahead readrate: transcode at up to 1.6x playback speed so the client
-        // can build a healthy jitter buffer against spotty or high-latency connections.
-        // Initial burst: 10s of audio/video for instant startup headroom.
-        const burstReadRate = Math.min(2.5, Math.max(1.3, (parseFloat(spd) || 1.0) * 1.5));
-        inputArgs.push(
-          "-readrate",
-          String(burstReadRate),
-          "-readrate_initial_burst",
-          "10.0",
-          "-fflags",
-          "+genpts",
-          "-i",
-          streamUrl
-        );
-
-        const vfParts = [];
-        if (Math.abs(spd - 1.0) > 0.01) {
-          vfParts.push(`setpts=PTS/${spd}`);
-        }
-        vfParts.push("fps=30", `scale=${scale}`);
-
-        const afParts = [];
-        if (Math.abs(spd - 1.0) > 0.01) {
-          afParts.push(`atempo=${spd}`);
-        }
-        afParts.push("aresample=async=1");
-
-        const ffmpeg = spawn(
-          "ffmpeg",
-          [
-            ...inputArgs,
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a:0?",
-            "-c:v",
-            "mpeg1video",
-            "-q:v",
-            "5",
-            "-b:v",
-            bitrate,
-            "-bf",
-            "0",
-            "-vf",
-            vfParts.join(","),
-            "-c:a",
-            "mp2",
-            "-b:a",
-            "128k",
-            "-ar",
-            "44100",
-            "-ac",
-            "2",
-            "-af",
-            afParts.join(","),
-            "-pes_payload_size",
-            "0",
-            "-f",
-            "mpegts",
-            "-muxdelay",
-            "0.001",
-            "-muxpreload",
-            "0",
-            "-"
-          ],
-          { stdio: ["ignore", "pipe", "pipe"] }
-        );
-
-        activeFfmpeg = ffmpeg;
-        let bytesSentSinceSpawn = 0;
-        const MAX_WS_BUFFER = 2 * 1024 * 1024; // 2MB backpressure limit
-        let isStdoutPaused = false;
-
-        ffmpeg.stdout.on("data", (chunk) => {
-          if (wsClosed || activeFfmpeg !== ffmpeg) return;
-          if (ws.readyState === 1) {
-            ws.send(chunk);
-            bytesSentSinceSpawn += chunk.length;
-
-            // WebSocket backpressure: pause ffmpeg if client connection cannot keep up
-            if (ws.bufferedAmount > MAX_WS_BUFFER && !isStdoutPaused) {
-              isStdoutPaused = true;
-              try {
-                ffmpeg.stdout.pause();
-              } catch {
-                // Ignore
-              }
-            }
-
-            // If seeking while paused, allow enough packets for 1 decoded preview frame then SIGSTOP
-            if (
-              isPaused &&
-              bytesSentSinceSpawn >= 96 * 1024 &&
-              !pauseHoldTimer
-            ) {
-              pauseHoldTimer = setTimeout(() => {
-                pauseHoldTimer = null;
-                if (isPaused && activeFfmpeg === ffmpeg) {
-                  try {
-                    ffmpeg.kill("SIGSTOP");
-                  } catch {
-                    // Ignore
-                  }
-                }
-              }, 30);
-            }
-          }
-        });
-
-        drainInterval = setInterval(() => {
-          if (wsClosed || activeFfmpeg !== ffmpeg) {
-            if (drainInterval) clearInterval(drainInterval);
-            drainInterval = null;
-            return;
-          }
-          if (isStdoutPaused && ws.bufferedAmount < 512 * 1024) {
-            isStdoutPaused = false;
-            try {
-              ffmpeg.stdout.resume();
-            } catch {
-              // Ignore
-            }
-          }
-        }, 50);
-
-        ffmpeg.stderr.on("data", () => {});
-
-        ffmpeg.on("close", (code) => {
-          if (drainInterval) {
-            clearInterval(drainInterval);
-            drainInterval = null;
-          }
-          if (wsClosed || activeFfmpeg !== ffmpeg) return;
-          activeFfmpeg = null;
-          if (code === 0) {
-            if (loopEnabled) {
-              currentSeek = 0;
-              doStream(streamUrl, true);
-            } else {
-              currentSeek = duration > 0 ? duration : 0;
-              isPaused = true;
-              sendJson({ type: "ended", duration });
-            }
-            return;
-          }
-          if (code !== 0 && code !== null) {
-            sendJson({
-              type: "status",
-              message: `Stream ended (code ${code})`
-            });
-          }
-          try {
-            ws.close();
-          } catch {
-            // Ignore
-          }
-        });
-
-        ffmpeg.on("error", (err) => {
-          if (wsClosed || activeFfmpeg !== ffmpeg) return;
-          sendJson({
-            type: "error",
-            message: (err?.message || "ffmpeg error").slice(0, 100)
-          });
-        });
-      } catch (err) {
-        sendJson({
-          type: "error",
-          message: (err?.message || "spawn error").slice(0, 100)
-        });
-        try {
-          ws.close();
-        } catch {
-          // Ignore
-        }
-      }
+      doStreamWebCodecs(streamUrl, isReset);
     }
 
     // WebCodecs variant of doStream: H.264 Annex-B (stdout) + PCM (fd 3) → binary frames.

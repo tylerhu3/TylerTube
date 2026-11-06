@@ -1,4 +1,4 @@
-// WebCodecs Drive engine: WebSocket (H.264 + PCM, see protocol.js) → VideoDecoder → canvas,
+// WebCodecs engine: WebSocket (H.264 + PCM, see protocol.js) → VideoDecoder → canvas,
 // PCM → AudioContext. Driven by WebCodecsPlayer.jsx; no React here.
 //
 // Clock: one timeline. Stream time t (seconds, 0 at each meta/reset) maps video frame
@@ -183,9 +183,9 @@ export class WebCodecsEngine {
   handleControl(msg) {
     if (this.unsupportedServer) return;
     if (msg.type === "meta" && msg.transport !== "webcodecs") {
-      // An older Drive server ignores codec=webcodecs and streams MPEG-TS.
+      // An outdated stream server (pre-WebCodecs) streams MPEG-TS instead.
       this.unsupportedServer = true;
-      this.cb.onError?.("Drive server has no WebCodecs support (restart npm run server)");
+      this.cb.onError?.("Stream server is outdated (restart npm run server)");
       this.cb.onControl?.(msg);
       return;
     }
