@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import Plyr from "plyr";
 import "plyr/dist/plyr.css";
 import DriveVideoPlayer from "./DriveVideoPlayer";
+import WebCodecsPlayer from "./WebCodecsPlayer";
+import { isWebCodecsSupported } from "./webcodecs/protocol";
 
 function srtToVtt(srtText) {
   const normalized = srtText
@@ -90,9 +92,14 @@ export default function VideoPlayer({
   viewMode = "desktop",
   playerMode = "standard",
   onTogglePlayerMode,
+  onSetPlayerMode,
   onToggleTheater
 }) {
   const isDriveMode = playerMode === "drive";
+  const isWebCodecsMode = playerMode === "webcodecs";
+  // Drive and WebCodecs both replace Plyr with a canvas player exposing seekTo/skipBy.
+  const isCanvasMode = isDriveMode || isWebCodecsMode;
+  const webCodecsSupported = isWebCodecsSupported();
   const containerRef = useRef(null);
   const playerRef = useRef(null);
   const drivePlayerRef = useRef(null);
@@ -425,7 +432,7 @@ export default function VideoPlayer({
   }, [video]);
 
   const handleRestartFromBeginning = () => {
-    if (isDriveMode && drivePlayerRef.current) {
+    if (isCanvasMode && drivePlayerRef.current) {
       drivePlayerRef.current.seekTo(0);
     }
     const player = playerRef.current;
@@ -441,7 +448,7 @@ export default function VideoPlayer({
   };
 
   const handleJumpToSavedTime = (targetTime) => {
-    if (isDriveMode && drivePlayerRef.current && targetTime > 0) {
+    if (isCanvasMode && drivePlayerRef.current && targetTime > 0) {
       drivePlayerRef.current.seekTo(targetTime);
       return;
     }
@@ -459,7 +466,7 @@ export default function VideoPlayer({
   };
 
   const handleRewind = () => {
-    if (isDriveMode && drivePlayerRef.current) {
+    if (isCanvasMode && drivePlayerRef.current) {
       drivePlayerRef.current.skipBy(-10);
       return;
     }
@@ -467,7 +474,7 @@ export default function VideoPlayer({
   };
 
   const handleForward = () => {
-    if (isDriveMode && drivePlayerRef.current) {
+    if (isCanvasMode && drivePlayerRef.current) {
       drivePlayerRef.current.skipBy(10);
       return;
     }
@@ -615,10 +622,10 @@ export default function VideoPlayer({
   };
 
   useEffect(() => {
-    if ((isHidden || isDriveMode) && playerRef.current && !playerRef.current.paused) {
+    if ((isHidden || isCanvasMode) && playerRef.current && !playerRef.current.paused) {
       playerRef.current.pause();
     }
-  }, [isHidden, isDriveMode]);
+  }, [isHidden, isCanvasMode]);
 
   const floatingStyle = isSidePlayer
     ? {
@@ -767,12 +774,27 @@ export default function VideoPlayer({
       <div
         className="video-wrapper"
         ref={containerRef}
-        style={isDriveMode ? { display: "none" } : undefined}
+        style={isCanvasMode ? { display: "none" } : undefined}
       />
 
       {isDriveMode && (
         <div className="video-wrapper drive-mode-wrapper">
           <DriveVideoPlayer
+            ref={drivePlayerRef}
+            video={video}
+            savedTime={savedTime}
+            onTimeUpdate={onTimeUpdate}
+            onEnded={onEnded}
+            isHidden={isHidden}
+            onToggleTheater={onToggleTheater}
+            onSwitchToStandard={onTogglePlayerMode}
+          />
+        </div>
+      )}
+
+      {isWebCodecsMode && (
+        <div className="video-wrapper drive-mode-wrapper">
+          <WebCodecsPlayer
             ref={drivePlayerRef}
             video={video}
             savedTime={savedTime}
@@ -827,7 +849,11 @@ export default function VideoPlayer({
             <button
               type="button"
               className={`ctrl-btn drive-switch-btn ${isDriveMode ? "active" : ""}`}
-              onClick={onTogglePlayerMode}
+              onClick={
+                onSetPlayerMode
+                  ? () => onSetPlayerMode(isDriveMode ? "standard" : "drive")
+                  : onTogglePlayerMode
+              }
               title={
                 isDriveMode
                   ? "Switch back to Standard Video Player (D)"
@@ -835,6 +861,23 @@ export default function VideoPlayer({
               }
             >
               {isDriveMode ? "🎬 Standard Player" : "🚗 Drive Player"}
+            </button>
+          )}
+          {onSetPlayerMode && (
+            <button
+              type="button"
+              className={`ctrl-btn drive-switch-btn webcodecs-switch-btn ${isWebCodecsMode ? "active" : ""}`}
+              onClick={() => onSetPlayerMode(isWebCodecsMode ? "standard" : "webcodecs")}
+              disabled={!webCodecsSupported && !isWebCodecsMode}
+              title={
+                !webCodecsSupported
+                  ? "WebCodecs player unavailable: this browser has no VideoDecoder"
+                  : isWebCodecsMode
+                    ? "Switch back to Standard Video Player (D)"
+                    : "Switch to WebCodecs H.264 canvas player (audio-clocked)"
+              }
+            >
+              {isWebCodecsMode ? "🎬 Standard Player" : "⚡ WebCodecs"}
             </button>
           )}
           <button

@@ -489,8 +489,10 @@ export default function App() {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }, []);
 
+  // playerMode: "standard" | "drive" | "webcodecs". D toggles standard ↔ drive; from
+  // webcodecs (picked via its button in VideoPlayer) D returns to standard.
   const togglePlayerMode = useCallback(() => {
-    setPlayerMode((prev) => (prev === "drive" ? "standard" : "drive"));
+    setPlayerMode((prev) => (prev === "standard" ? "drive" : "standard"));
   }, []);
 
   // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player, 'M' for Mobile/Desktop View, 'D' for Drive Player when not typing in inputs
@@ -583,6 +585,7 @@ export default function App() {
           viewMode={viewMode}
           playerMode={playerMode}
           onTogglePlayerMode={togglePlayerMode}
+          onSetPlayerMode={setPlayerMode}
           onToggleTheater={toggleTheaterMode}
         />
 

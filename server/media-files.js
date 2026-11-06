@@ -76,3 +76,30 @@ export function probeVideoDuration(filePath) {
     return 0;
   }
 }
+
+// True if the file has at least one audio stream (WebCodecs mode adds a PCM output only then).
+export function probeHasAudioStream(filePath) {
+  if (!filePath) return false;
+  try {
+    const out = execFileSync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        filePath
+      ],
+      { timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }
+    )
+      .toString()
+      .trim();
+    return out.length > 0;
+  } catch {
+    return false;
+  }
+}

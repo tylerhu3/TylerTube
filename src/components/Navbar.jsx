@@ -194,20 +194,20 @@ export default function Navbar({
             <button
               type="button"
               className={`btn-secondary drive-mode-nav-btn ${
-                playerMode === "drive" ? "active" : ""
+                playerMode !== "standard" ? "active" : ""
               }`}
               onClick={onTogglePlayerMode}
               title={
-                playerMode === "drive"
+                playerMode !== "standard"
                   ? "Switch to Standard Video Player (D)"
                   : "Switch to Tesla Drive MPEG1 Video Player (D)"
               }
             >
               {isMobileMode
-                ? playerMode === "drive"
+                ? playerMode !== "standard"
                   ? "🎬"
                   : "🚗"
-                : playerMode === "drive"
+                : playerMode !== "standard"
                   ? "🎬 Standard Player"
                   : "🚗 Drive Player"}
             </button>

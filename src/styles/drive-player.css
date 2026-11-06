@@ -675,6 +675,19 @@
     color: #ffffff;
 }
 
+/* WebCodecs player (WebCodecsPlayer.jsx): same chrome, its own accent */
+.webcodecs-switch-btn.active,
+.yt-webcodecs-player .yt-drive-tag {
+    background: #0b7a75;
+    border-color: #12a39c;
+    color: #ffffff;
+}
+
+.webcodecs-switch-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 @media (max-width: 600px) {
     .yt-sync-group {
         display: none;
