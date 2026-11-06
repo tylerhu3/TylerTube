@@ -127,6 +127,13 @@ export default function VideoPlayer({
   const volumeBoostRef = useRef(1);
   const boostGraphRef = useRef(null); // { ctx, gain, media, source }
 
+  // Once built, the graph is permanent (an element can't be un-routed), so all Plyr audio
+  // depends on the context running: resume it from any non-running state ("suspended", or
+  // Safari's "interrupted" after a call/Siri), both here and whenever it changes mid-playback.
+  const resumeBoostContext = (ctx) => {
+    if (ctx.state !== "running" && ctx.state !== "closed") ctx.resume().catch(() => {});
+  };
+
   const syncBoostGraph = (create = false) => {
     const media = playerRef.current?.media;
     let graph = boostGraphRef.current;
@@ -137,23 +144,30 @@ export default function VideoPlayer({
       const gain = ctx.createGain();
       gain.connect(ctx.destination);
       graph = boostGraphRef.current = { ctx, gain, media: null, source: null };
+      ctx.onstatechange = () => {
+        const current = playerRef.current?.media;
+        if (current && !current.paused) resumeBoostContext(ctx);
+      };
     }
     if (media && graph.media !== media) {
       try {
-        graph.source?.disconnect();
-      } catch {
-        // Already disconnected
-      }
-      try {
-        graph.source = graph.ctx.createMediaElementSource(media);
-        graph.source.connect(graph.gain);
+        // Connect the new element before dropping the old one, so a failure here leaves the
+        // previous routing intact instead of a half-disconnected graph.
+        const source = graph.ctx.createMediaElementSource(media);
+        source.connect(graph.gain);
+        try {
+          graph.source?.disconnect();
+        } catch {
+          // Already disconnected
+        }
+        graph.source = source;
         graph.media = media;
       } catch {
-        // Element already routed elsewhere; leave it at native volume
+        // Element can't be routed; it plays at native volume without the boost
       }
     }
     graph.gain.gain.value = volumeBoostRef.current;
-    if (graph.ctx.state === "suspended") graph.ctx.resume().catch(() => {});
+    resumeBoostContext(graph.ctx);
   };
 
   const handleCycleBoost = () => {
@@ -300,7 +314,10 @@ export default function VideoPlayer({
     if (!player || !video) return;
 
     // Flush progress of the previous video before switching source
+    // Skipped in WebCodecs mode: the hidden Plyr's position is stale, and the canvas player
+    // already saved the real one on unmount.
     if (
+      !isCanvasModeRef.current &&
       isReadyToRecordRef.current &&
       !isRestoringSeekRef.current &&
       loadedVideoIdRef.current &&

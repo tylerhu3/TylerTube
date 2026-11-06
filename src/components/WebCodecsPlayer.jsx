@@ -466,8 +466,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
       `&quality=${currentQualityRef.current}` +
       `&speed=${playbackSpeedRef.current}` +
       `&seek=${startSeek.toFixed(2)}` +
-      `&loop=${loopEnabledRef.current ? "1" : "0"}` +
-      `&codec=webcodecs`;
+      `&loop=${loopEnabledRef.current ? "1" : "0"}`;
 
     const applyStreamInfo = (msg) => {
       const sk = parseFloat(msg.seekTime) || 0;

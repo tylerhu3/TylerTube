@@ -12,7 +12,7 @@ Run on the Mac (macOS, Homebrew Nginx). Stop and report on the first failure.
 4. `nginx -t && brew services restart nginx`
 5. The WebCodecs player needs the standalone stream server (LaunchAgent `com.tylertube.drive`): `curl -s http://127.0.0.1:5180/healthz` → `ok`.
    If it fails, check `launchctl print gui/$(id -u)/com.tylertube.drive` and `/tmp/tylertube-drive.log`,
-   and tell the user to install the LaunchAgent (README, "Run the Drive Server") or run `npm run server`
+   and tell the user to install the LaunchAgent (README, "4. Run the Stream Server (WebCodecs player)") or run `npm run server`
    (don't leave it running in the background yourself unless asked). If `server/` changed since it
    started, restart it: `launchctl kickstart -k gui/$(id -u)/com.tylertube.drive`.
 6. Smoke test:
