@@ -225,3 +225,63 @@
     flex-shrink: 0;
 }
 
+
+/* Navbar button labels (full on wide screens, short at tablet widths) */
+.header-actions > .btn-secondary {
+    gap: 0.35em;
+}
+
+.nav-btn-label-short {
+    display: none;
+}
+
+/* Tablet widths in Desktop view mode (e.g. iPad Air 820 portrait, 1180 landscape):
+   keep one row; the search bar shrinks instead of the buttons wrapping. */
+@media (min-width: 641px) and (max-width: 1279px) {
+    [data-view-mode="desktop"] .navbar {
+        padding: 0.7rem 1.25rem;
+    }
+
+    [data-view-mode="desktop"] .navbar-left {
+        flex-shrink: 0;
+    }
+
+    [data-view-mode="desktop"] .header-actions {
+        flex: 1 1 auto;
+        min-width: 0;
+        flex-wrap: nowrap;
+    }
+
+    [data-view-mode="desktop"] .header-actions > * {
+        flex-shrink: 0;
+    }
+
+    [data-view-mode="desktop"] .header-actions > .desktop-search-wrapper {
+        flex: 0 1 240px;
+        min-width: 110px;
+    }
+
+    [data-view-mode="desktop"] #searchInput {
+        width: 100%;
+        min-width: 0;
+    }
+}
+
+@media (min-width: 641px) and (max-width: 1099px) {
+    [data-view-mode="desktop"] .nav-btn-label,
+    [data-view-mode="desktop"] .color-theme-btn-label {
+        display: none;
+    }
+
+    [data-view-mode="desktop"] .nav-btn-label-short {
+        display: inline;
+    }
+
+    [data-view-mode="desktop"] .header-actions > .btn-secondary {
+        padding: 0.5rem 0.8rem;
+    }
+
+    [data-view-mode="desktop"] .color-theme-btn {
+        padding: 0.45rem 0.65rem;
+    }
+}

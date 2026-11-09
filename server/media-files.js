@@ -103,3 +103,30 @@ export function probeHasAudioStream(filePath) {
     return false;
   }
 }
+
+// Source video frame rate as the raw ffprobe pair { avg, r } (e.g. "30000/1001"); parse with
+// pickSourceFps() in webcodecs-stream.js. Empty strings when probing fails.
+export function probeVideoFrameRate(filePath) {
+  if (!filePath) return { avg: "", r: "" };
+  try {
+    const out = execFileSync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=avg_frame_rate,r_frame_rate",
+        "-of",
+        "json",
+        filePath
+      ],
+      { timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }
+    ).toString();
+    const stream = JSON.parse(out)?.streams?.[0] || {};
+    return { avg: String(stream.avg_frame_rate || ""), r: String(stream.r_frame_rate || "") };
+  } catch {
+    return { avg: "", r: "" };
+  }
+}

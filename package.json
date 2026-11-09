@@ -10,7 +10,9 @@
     "server": "node server/standalone.js",
     "thumbnails": "node scripts/generate-thumbnails.js",
     "test": "node --test \"tests/**/*.test.js\"",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "deploy:public": "node scripts/deploy-public.mjs",
+    "tunnel": "node scripts/tunnel.mjs"
   },
   "dependencies": {
     "plyr": "^3.7.8",

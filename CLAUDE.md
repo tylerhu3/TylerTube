@@ -10,7 +10,8 @@ User-facing docs: [README.md](README.md).
 Browser ──► Nginx :8080 ──► dist/                (built SPA)
                      ├────► public/videos/       (/videos/*, byte-range MP4)
                      ├────► public/thumbnails/   (/thumbnails/*)
-                     └─proxy─► stream server :5180    (/ws/mpeg1; npm run server)
+                     └─proxy─► stream server :5180    (/ws/mpeg1, /api/state; npm run server)
+Internet ─► Netlify (redirect-site/, 302) ─► *.trycloudflare.com quick tunnel ─► Nginx :8080
 ```
 
 - **Backend lives in `server/`**, mounted into Vite by `server/plugin.js` (`vite.config.js` is ~20 lines),
@@ -21,6 +22,21 @@ Browser ──► Nginx :8080 ──► dist/                (built SPA)
     WebSocket (pure pieces and wire format in `webcodecs-stream.js`). The path name is historical
     (it used to carry MPEG1); kept so Nginx needn't change. Attached to Vite :5173 in dev and to
     `standalone.js` :5180 (`DRIVE_PORT`) in production.
+  - `user-state.js`: `/api/state` (GET, POST = merge + return). Server copy of progress,
+    favorites, last video, theme in `data/user-state.json` (dev: `user-state.dev.json`), one
+    `"default"` profile until login (`getProfileId` hook, meant for a Firebase uid). Merge rules in
+    `src/lib/syncMerge.js` (shared with the client).
+  - `visitors.js`: visitor log. `POST /api/visit` (on each page load, `src/lib/visitors.js`),
+    `GET /api/visitors` (listed in the hamburger menu, IPs masked). Full records in
+    `data/visitors.json` (dev: `visitors.dev.json`); client IP from `CF-Connecting-IP`/`X-Forwarded-For`.
+    Location: country from `CF-IPCountry`, city/region from a background ipwho.is lookup once
+    per new public IP (`TYLERTUBE_GEOIP=0` disables).
+  - Uploads: `upload.js` (`/api/upload*` routes, `X-Upload-Key` check against
+    `TYLERTUBE_UPLOAD_KEY` or `data/upload-key`; no key = off), `upload-store.js` (sessions in
+    `public/videos/.uploads/`, free-space reserve, ffprobe check, `link()` so nothing is
+    overwritten), `upload-rules.js` (pure, tested). Client: `src/lib/uploader.js` (8 MB chunks,
+    retries, resume), `UploadPage.jsx` + `components/upload/`. `http-utils.js` holds
+    `readBody`/`sendJSON`/`clientIp` for all JSON routes.
   - `media-files.js` (`resolveLocalVideoFile`, path-traversal guard, ffprobe helpers), `shared.js`,
     `build-info.js` (version `define`s).
 - **Player modes** (`playerMode` in `App.jsx`, toggled by D / the player buttons):
@@ -33,7 +49,10 @@ Browser ──► Nginx :8080 ──► dist/                (built SPA)
     keeps `positionRef` (exact last position) and hands it across a mode switch; a hidden Plyr
     doesn't report progress while WebCodecs is active.
 - **State:** all app state is in `src/App.jsx` (no router, no store). Pages are switched by
-  `currentPage` = `"home" | "history" | "favorites"`. Persistence is `localStorage` only.
+  `currentPage` = `"home" | "history" | "favorites" | "upload"` (Upload stays mounted, hidden,
+  once opened so a queue keeps running while you browse). Persistence is `localStorage`, mirrored to
+  `/api/state` by `src/lib/sync.js` (`syncStore` in `App.jsx`; `main.jsx` awaits
+  `initialSync()` before render). Last-write-wins on `modifiedAt` per video / per field.
 
 ## Directory guide
 
@@ -42,6 +61,7 @@ Browser ──► Nginx :8080 ──► dist/                (built SPA)
 | `server/` | Backend (see Architecture). Unit-tested in `tests/server.test.js`, `tests/standalone.test.js`, `tests/webcodecs.test.js` |
 | `src/App.jsx` | All state, localStorage keys, keyboard shortcuts, page switch, mobile bottom nav |
 | `src/lib/storage.js` | Never-throwing localStorage helpers (`readJSON`, `writeJSON`, `writeString`, …) |
+| `src/lib/sync.js`, `syncMerge.js` | Server sync of localStorage (see State) and the shared merge rules |
 | `src/utils/format.js` | Shared formatting (`formatDuration`) |
 | `src/components/VideoPlayer.jsx` | Plyr player, standard/webcodecs switch, position handoff |
 | `src/components/WebCodecsPlayer.jsx` | WebCodecs player component: state/refs, engine lifecycle, controls |
@@ -56,7 +76,8 @@ Browser ──► Nginx :8080 ──► dist/                (built SPA)
 | `scripts/check.mjs` | Static check: parse, undefined/unused identifiers, broken imports |
 | `scripts/generate-thumbnails.js` | ffmpeg thumbnail generator (also imported by `server/`) |
 | `scripts/generate-icons.py` | Regenerates favicons in `public/` |
-| `scripts/launchd/` | LaunchAgent plist that keeps `npm run server` running (install steps in README) |
+| `scripts/launchd/` | LaunchAgents: `com.tylertube.drive` (`npm run server`), `com.tylertube.tunnel` (`tunnel-watch.mjs`) |
+| `scripts/tunnel.mjs`, `tunnel-watch.mjs`, `deploy-public.mjs` | Quick-tunnel discovery/start, Netlify redirect push (`redirect-site/`, its own repo, gitignored), auto-rebuild on new videos, `npm run deploy:public` |
 | `nginx.conf` | Production config (copied to `/opt/homebrew/etc/nginx/`) |
 | `public/videos/`, `public/thumbnails/` | Media, ~51 GB, gitignored. **Never read or list recursively.** |
 
@@ -70,7 +91,9 @@ Use `grep -n "^/\* " src/styles/<file>.css` to find sections.
 npm run dev          # Vite dev server :5173 (also hosts the stream WS)
 npm run build        # Build to dist/ (also generates missing thumbnails)
 npm run preview      # Serve dist/ with the same middlewares (:4173)
-npm run server       # Production stream server :5180 (Nginx proxies /ws/mpeg1 here)
+npm run server       # Production stream server :5180 (Nginx proxies /ws/mpeg1 and /api/ here)
+npm run deploy:public  # Build + Nginx + stream server + tunnel + push redirect (-- --dry-run)
+npm run tunnel status  # Quick tunnel(s) for :8080 and the published redirect URL
 npm run thumbnails   # Generate missing thumbnails only
 npm run check        # Static check of all JS/JSX (~0.5 s). Run after every edit.
 npm test             # Unit tests (node:test, ~100 ms)
@@ -100,8 +123,10 @@ Requires `ffmpeg` (with libx264)/`ffprobe` on PATH.
 - **Production WebCodecs playback needs `npm run server`** (LaunchAgent `com.tylertube.drive`, port 5180):
   Nginx proxies `/ws/mpeg1` there. It doesn't hot-reload; restart it after editing `server/`.
   launchd runs it with a fixed `PATH` (set in the plist) so ffmpeg/ffprobe resolve.
-- **Catalog is baked at build time.** After adding videos in production, re-run `npm run build`.
-  In dev, the watcher reloads it.
+- **Catalog is baked at build time.** In production the tunnel keeper (`com.tylertube.tunnel`)
+  rebuilds automatically once `public/videos/` differs from the last build's recorded signature
+  (`data/catalog-signature.json`, written by every `vite build`; `server/video-signature.js`) and
+  has been still for 60 s. `AUTO_REBUILD=0` disables it. In dev, Vite's watcher reloads it.
 - `build.copyPublicDir: false`. Nginx serves media from `public/`. Root-level assets that `dist/`
   needs (favicons, manifest) are copied by a hard-coded list in `closeBundle()`
   in `server/plugin.js`. **New public asset → add it to that list.**
@@ -110,10 +135,18 @@ Requires `ffmpeg` (with libx264)/`ffprobe` on PATH.
 - `drive-ws.js` (server) and `WebCodecsEngine.js` (client) share a JSON control protocol
   (`pause|resume|seek|speed|quality|loop` ↔ `meta|status|reset|ended|error`) plus the binary
   frame format in `server/webcodecs-stream.js` ↔ `webcodecs/protocol.js`. Change them together.
+- **Hidden (dot) paths under `public/videos/` are invisible** to the catalog, thumbnails, the
+  rebuild signature and the dev reload. Upload partials rely on that (`.uploads/`).
+- Dev catalog changes send the HMR event `tylertube:catalog-changed` (not a forced reload);
+  `src/lib/uploadActivity.js` skips the reload while the Upload page has a queue.
 - File paths from clients go through `resolveLocalVideoFile()` (path-traversal guard). Keep any
   new file-serving code behind it or an equivalent `startsWith(videosDir + path.sep)` check.
 - Mobile layout = `viewMode === "mobile"` (user toggle in the hamburger menu, not just viewport).
   Mobile overrides live in `src/styles/mobile.css`; check both modes after UI edits.
+- **Synced state:** a write to progress must set `modifiedAt` and call `syncStore.touchProgress()`;
+  a synced field (favorites, last video, theme, color theme) needs `syncStore.touch(name)` on a
+  *user* change only (stamping on mount would override other devices). Removals are written, not
+  deleted (the server never deletes by omission).
 - Theme migration flag `tylertube_theme_migrated_v2` in `App.jsx`: don't remove casually.
 - Nginx serves from the symlink `/Users/Shared/MyStreamingApp` → this repo.
 - `scripts/check.mjs` relies on `@babel/parser`/`@babel/traverse`, installed transitively by

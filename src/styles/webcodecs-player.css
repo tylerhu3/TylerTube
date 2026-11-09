@@ -524,12 +524,13 @@
     color: #fff;
 }
 
-.yt-stop-btn {
-    background: rgba(200, 20, 20, 0.85);
-    border: none;
-    color: #fff;
+/* "Use Standard Player": neutral, same translucent look as the pill buttons */
+.yt-standard-btn {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #ddd;
     font-size: 0.7rem;
-    font-weight: 700;
+    font-weight: 600;
     padding: 5px 10px;
     border-radius: 4px;
     cursor: pointer;
@@ -537,8 +538,9 @@
     white-space: nowrap;
 }
 
-.yt-stop-btn:hover {
-    background: #e01b1b;
+.yt-standard-btn:hover {
+    background: rgba(255, 255, 255, 0.22);
+    color: #fff;
 }
 
 /* Settings Popup Menu */
@@ -549,6 +551,8 @@
     bottom: 52px;
     z-index: 30;
     width: 240px;
+    max-height: calc(100% - 64px);
+    overflow-y: auto;
     background: rgba(20, 20, 28, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 8px;
@@ -668,9 +672,7 @@
     letter-spacing: 0.02em;
 }
 
-/* WebCodecs player accent (tag + active player-switch buttons) */
-.webcodecs-switch-btn.active,
-.player-mode-nav-btn.active,
+/* WebCodecs player accent (tag only; the player-switch buttons stay neutral) */
 .yt-webcodecs-player .yt-drive-tag {
     background: #0b7a75;
     border-color: #12a39c;

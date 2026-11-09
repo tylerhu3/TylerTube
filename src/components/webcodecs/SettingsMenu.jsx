@@ -1,13 +1,33 @@
 // Settings popup for the WebCodecs player (presentational; state lives in WebCodecsPlayer).
 import React from "react";
 import { APP_VERSION } from "../../version";
-import { SPEED_OPTIONS, QUALITY_OPTIONS, BUFFER_OPTIONS } from "./playerUtils";
+import {
+  SPEED_OPTIONS,
+  QUALITY_OPTIONS,
+  BUFFER_OPTIONS,
+  FPS_OPTIONS,
+  DEFAULT_FPS_SETTING,
+  formatFps
+} from "./playerUtils";
+
+// "Auto (30)", "Source (29.97)", "60 (30)" when capped by the source, else "30".
+function fpsHeaderLabel(setting, streamFps) {
+  const opt =
+    FPS_OPTIONS.find((o) => o.value === setting) ||
+    FPS_OPTIONS.find((o) => o.value === DEFAULT_FPS_SETTING);
+  const eff = formatFps(streamFps);
+  if (!eff) return opt.label;
+  if (typeof setting === "number" && eff === String(setting)) return opt.label;
+  return `${opt.label} (${eff})`;
+}
 
 export default function SettingsMenu({
   menuRef,
   open,
   playbackSpeed,
   quality,
+  fpsSetting,
+  streamFps,
   bufferMode,
   bufferTarget,
   syncLabelTxt,
@@ -15,6 +35,7 @@ export default function SettingsMenu({
   statsOpen,
   onSetSpeed,
   onSetQuality,
+  onSetFps,
   onSetBufferTarget,
   onAdjustSync,
   onResetSync,
@@ -62,6 +83,25 @@ export default function SettingsMenu({
               onClick={() => onSetQuality(q)}
             >
               {q}p
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="yt-menu-section">
+        <div className="yt-menu-label">
+          <span>Frame Rate</span>
+          <span>{fpsHeaderLabel(fpsSetting, streamFps)}</span>
+        </div>
+        <div className="yt-chip-row">
+          {FPS_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              className={`yt-chip ${fpsSetting === opt.value ? "active" : ""}`}
+              onClick={() => onSetFps(opt.value)}
+            >
+              {opt.label}
             </button>
           ))}
         </div>

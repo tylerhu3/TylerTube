@@ -10,7 +10,7 @@ export const WC_AUDIO_RATE = 44100;
 export const WC_FPS = 30;
 export const WC_FRAME_US = 1e6 / WC_FPS;
 
-// Constrained Baseline; 1080p needs level 4.0 (0x28), everything else fits level 3.1 (0x1F).
+// Constrained Baseline at 30 fps: 1080p needs level 4.0 (0x28), everything else fits 3.1 (0x1F).
 // The server also sends the string as meta.videoCodec; this is the fallback.
 export const WC_CODEC_BY_QUALITY = {
   360: "avc1.42E01F",
@@ -19,8 +19,24 @@ export const WC_CODEC_BY_QUALITY = {
   1080: "avc1.42E028"
 };
 
-export function codecForQuality(quality) {
-  return WC_CODEC_BY_QUALITY[quality] || WC_CODEC_BY_QUALITY[720];
+// Above 30 fps the macroblock rate needs a higher level (720p60 → 3.2, 1080p60 → 4.2).
+// Mirrors h264LevelFor() in server/webcodecs-stream.js (tests check they agree).
+const WC_HIGH_FPS_CODEC = {
+  360: "avc1.42E01F",
+  480: "avc1.42E01F",
+  720: "avc1.42E020",
+  1080: "avc1.42E02A"
+};
+
+export function codecForQuality(quality, fps = WC_FPS) {
+  const table = Number(fps) > WC_FPS + 0.01 ? WC_HIGH_FPS_CODEC : WC_CODEC_BY_QUALITY;
+  return table[quality] || table[720];
+}
+
+// Microseconds per frame for a stream's fps (meta/reset `fps`); WC_FRAME_US when unknown.
+export function frameDurationUs(fps) {
+  const f = Number(fps);
+  return f > 0 ? 1e6 / f : WC_FRAME_US;
 }
 
 export function isWebCodecsSupported(win = typeof window !== "undefined" ? window : undefined) {

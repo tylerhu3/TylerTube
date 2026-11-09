@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TylerTube keeper (scripts/tunnel-watch.mjs) as a per-user LaunchAgent: rebuilds when
+  public/videos/ changes (AUTO_REBUILD=0 disables), and keeps a
+  cloudflared quick tunnel to Nginx :8080 running and the Netlify redirect repo pointed at it.
+  `npm run deploy:public` installs it if missing. By hand:
+  Install:  cp scripts/launchd/com.tylertube.tunnel.plist ~/Library/LaunchAgents/
+            launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tylertube.tunnel.plist
+  Restart:  launchctl kickstart -k gui/$(id -u)/com.tylertube.tunnel   (tunnel keeps its URL)
+  Remove:   launchctl bootout gui/$(id -u)/com.tylertube.tunnel
+  Logs:     /tmp/tylertube-tunnel.log (watcher), /tmp/tylertube-cloudflared.log (cloudflared)
+  Status:   node scripts/tunnel.mjs status
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tylertube.tunnel</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/node</string>
+        <string>/Users/Shared/MyStreamingApp/scripts/tunnel-watch.mjs</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/Shared/MyStreamingApp</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd's default PATH lacks Homebrew (cloudflared, git with osxkeychain). -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- cloudflared is started detached; don't kill it when the watcher restarts. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/tylertube-tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tylertube-tunnel.log</string>
+</dict>
+</plist>

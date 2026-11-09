@@ -1,6 +1,9 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { COLOR_THEMES } from "../data/themeColors";
 import { APP_VERSION, BUILD_TIME } from "../version";
+import { formatLastSeen } from "../lib/visitors";
+
+const VISITORS_PREVIEW = 5;
 
 export default function SideMenu({
   isOpen,
@@ -16,8 +19,15 @@ export default function SideMenu({
   historyCount = 0,
   favoritesCount = 0,
   inProgressCount = 0,
-  completedCount = 0
+  completedCount = 0,
+  visitors = null,
+  selfVisitor = null,
+  onVisitorNameChange
 }) {
+  const [showAllVisitors, setShowAllVisitors] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e) => {
@@ -127,6 +137,21 @@ export default function SideMenu({
                 <span className="side-menu-badge">{favoritesCount}</span>
               )}
             </button>
+
+            <button
+              type="button"
+              className={`side-menu-item ${currentPage === "upload" ? "active" : ""}`}
+              onClick={() => handleSelectPage("upload")}
+            >
+              <span className="side-menu-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+              </span>
+              <span className="side-menu-label">Upload</span>
+            </button>
           </div>
 
           <div className="side-menu-divider" />
@@ -150,6 +175,89 @@ export default function SideMenu({
           </div>
 
           <div className="side-menu-divider" />
+
+          {visitors && (
+            <>
+              <div className="side-menu-section">
+                <div className="side-menu-section-title">
+                  Visitors <span className="side-menu-visitor-total">{visitors.length}</span>
+                </div>
+                <ul className="side-menu-visitors">
+                  {(showAllVisitors ? visitors : visitors.slice(0, VISITORS_PREVIEW)).map((v) => {
+                    const isSelf = selfVisitor && v.id === selfVisitor.id;
+                    return (
+                      <li key={v.id} className={`side-menu-visitor ${isSelf ? "self" : ""}`}>
+                        <div className="side-menu-visitor-main">
+                          <span className="side-menu-visitor-name">
+                            {v.name || v.device}
+                            {isSelf && <span className="side-menu-visitor-you"> (you)</span>}
+                          </span>
+                          <span className="side-menu-visitor-seen">{formatLastSeen(v.lastSeen)}</span>
+                        </div>
+                        <div className="side-menu-visitor-meta">
+                          {v.name ? `${v.device} · ` : ""}
+                          {v.ip} · {v.visits} {v.visits === 1 ? "visit" : "visits"}
+                        </div>
+                        {v.location && <div className="side-menu-visitor-location">📍 {v.location}</div>}
+                      </li>
+                    );
+                  })}
+                </ul>
+                {visitors.length > VISITORS_PREVIEW && (
+                  <button
+                    type="button"
+                    className="side-menu-visitor-link"
+                    onClick={() => setShowAllVisitors((prev) => !prev)}
+                  >
+                    {showAllVisitors ? "Show fewer" : `Show all ${visitors.length}`}
+                  </button>
+                )}
+                {selfVisitor && onVisitorNameChange && (
+                  editingName ? (
+                    <form
+                      className="side-menu-visitor-form"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        onVisitorNameChange(nameDraft.trim());
+                        setEditingName(false);
+                      }}
+                    >
+                      <input
+                        type="text"
+                        value={nameDraft}
+                        maxLength={40}
+                        placeholder="Your name"
+                        aria-label="Your name in the visitor list"
+                        autoFocus
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") {
+                            e.stopPropagation();
+                            e.nativeEvent.stopImmediatePropagation();
+                            setEditingName(false);
+                          }
+                        }}
+                      />
+                      <button type="submit">Save</button>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      className="side-menu-visitor-link"
+                      onClick={() => {
+                        setNameDraft(selfVisitor.name || "");
+                        setEditingName(true);
+                      }}
+                    >
+                      {selfVisitor.name ? "Change your name" : "Add your name"}
+                    </button>
+                  )
+                )}
+              </div>
+
+              <div className="side-menu-divider" />
+            </>
+          )}
 
           <div className="side-menu-section">
             <div className="side-menu-section-title">Accent Theme</div>

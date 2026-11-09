@@ -1,4 +1,4 @@
-// WebSocket /ws/mpeg1?file=&quality=&seek=&speed=&loop=: ffmpeg → H.264 + PCM binary frames for
+// WebSocket /ws/mpeg1?file=&quality=&seek=&speed=&loop=&fps=: ffmpeg → H.264 + PCM binary frames for
 // src/components/WebCodecsPlayer.jsx (format: server/webcodecs-stream.js). The path name is
 // historical (it used to carry MPEG1 for JSMpeg); kept so the Nginx proxy config needn't change.
 // Client and server message formats must change together.
@@ -8,18 +8,21 @@ import { WebSocketServer } from "ws";
 import {
   resolveLocalVideoFile,
   probeVideoDuration,
-  probeHasAudioStream
+  probeHasAudioStream,
+  probeVideoFrameRate
 } from "./media-files.js";
 import {
   AnnexBSplitter,
   PcmCoalescer,
-  WC_FPS,
   WC_MAX_AHEAD_SEC,
   WC_RESUME_AHEAD_SEC,
   buildWebCodecsFfmpegArgs,
   frameTimestampUs,
+  normalizeFpsRequest,
   packAudioMessage,
   packVideoMessage,
+  pickSourceFps,
+  resolveOutputFps,
   webCodecsVideoParams
 } from "./webcodecs-stream.js";
 
@@ -58,6 +61,8 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     const initialSpeed = parseFloat(params.get("speed") || "1") || 1;
     const initialLoop =
       params.get("loop") === "1" || params.get("loop") === "true";
+    // "source" (default) or a number; the output rate is resolved per stream (resolveOutputFps).
+    let requestedFps = normalizeFpsRequest(params.get("fps"));
 
     const qualMap = {
       360: "640:360",
@@ -93,13 +98,24 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
       currentSeek = 0;
     }
     const hasAudio = probeHasAudioStream(localFile);
-    // Stream info sent with every meta/reset.
-    const webCodecsInfo = () => ({
-      transport: "webcodecs",
-      videoCodec: webCodecsVideoParams(currentQuality).codec,
-      hasAudio,
-      fps: WC_FPS
-    });
+    const probedRate = probeVideoFrameRate(localFile);
+    const sourceFps = pickSourceFps(probedRate.avg, probedRate.r);
+    const outputFps = () =>
+      resolveOutputFps({ requested: requestedFps, sourceFps, speed: currentSpeed });
+    // Stream info sent with every meta/reset. fps = output rate of this stream (frame n is at
+    // n/fps s); fpsCap = what "source" resolves to at the current speed; sourceFps 0 = unknown.
+    const webCodecsInfo = () => {
+      const { fps, cap } = outputFps();
+      return {
+        transport: "webcodecs",
+        videoCodec: webCodecsVideoParams(currentQuality, fps).codec,
+        hasAudio,
+        fps,
+        fpsCap: cap,
+        sourceFps,
+        requestedFps
+      };
+    };
 
     function sendJson(payload) {
       if (!wsClosed && ws.readyState === 1) {
@@ -164,6 +180,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     // ffmpeg exit we always send "ended" and the client seeks to 0 when it really reaches the end.
     function doStreamWebCodecs(streamUrl, isReset) {
       const spd = currentSpeed;
+      const fps = outputFps().fps;
       if (isReset) {
         sendJson({
           type: "reset",
@@ -185,6 +202,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
           seek: currentSeek,
           speed: spd,
           quality: currentQuality,
+          fps,
           hasAudio
         });
         const ffmpeg = spawn("ffmpeg", args, {
@@ -228,11 +246,11 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
         };
 
         const sendAccessUnit = (au) => {
-          sendBinary(packVideoMessage(au.data, au.keyframe, frameTimestampUs(frameIndex)));
+          sendBinary(packVideoMessage(au.data, au.keyframe, frameTimestampUs(frameIndex, fps)));
           frameIndex += 1;
           if (au.keyframe) keyframeSent = true;
           if (!lastTick) lastTick = Date.now();
-          const aheadSec = frameIndex / WC_FPS - playedSec;
+          const aheadSec = frameIndex / fps - playedSec;
           if (!flowPaused && aheadSec > WC_MAX_AHEAD_SEC) {
             flowPaused = true;
             updatePipes();
@@ -282,7 +300,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             socketPaused = false;
             changed = true;
           }
-          if (flowPaused && frameIndex / WC_FPS - playedSec < WC_RESUME_AHEAD_SEC) {
+          if (flowPaused && frameIndex / fps - playedSec < WC_RESUME_AHEAD_SEC) {
             flowPaused = false;
             changed = true;
           }
@@ -411,6 +429,17 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
         const q = parseInt(msg.quality, 10);
         if (!qualMap[q]) return;
         currentQuality = q;
+        if (Number.isFinite(msg.currentTime)) {
+          currentSeek =
+            duration > 0
+              ? Math.max(0, Math.min(duration - 0.1, parseFloat(msg.currentTime)))
+              : Math.max(0, parseFloat(msg.currentTime));
+        }
+        doStream(localFile, true);
+      } else if (msg.type === "fps") {
+        // "source" | number; restarts encoding at currentTime like "quality".
+        if (msg.fps !== "source" && !Number.isFinite(Number(msg.fps))) return;
+        requestedFps = normalizeFpsRequest(msg.fps);
         if (Number.isFinite(msg.currentTime)) {
           currentSeek =
             duration > 0

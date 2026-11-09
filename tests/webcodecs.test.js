@@ -7,14 +7,35 @@ import {
   PcmCoalescer,
   buildAtempoChain,
   buildWebCodecsFfmpegArgs,
+  ffmpegFpsArg,
   frameTimestampUs,
+  h264LevelFor,
+  normalizeFpsRequest,
   packAudioMessage,
   packVideoMessage,
+  parseFrameRate,
+  pickSourceFps,
+  resolveOutputFps,
+  scaledBitrateKbps,
   webCodecsVideoParams
 } from "../server/webcodecs-stream.js";
 import {
+  AUTO_FPS_TUNING,
+  autoFpsLadder,
+  classifyHealthSample,
+  createAutoFpsState,
+  restartAutoFpsWarmup,
+  stepAutoFps
+} from "../src/components/webcodecs/autoFps.js";
+import {
+  DEFAULT_FPS_SETTING,
+  formatFps,
+  parseFpsSetting
+} from "../src/components/webcodecs/playerUtils.js";
+import {
   WC_CODEC_BY_QUALITY,
   codecForQuality,
+  frameDurationUs,
   isWebCodecsSupported,
   parseBinaryMessage,
   pcm16leToFloat32
@@ -206,4 +227,201 @@ test("bufferedAheadSec and mediaTimeFromStream", () => {
   assert.equal(mediaTimeFromStream(10, 2, 1.5), 13);
   assert.equal(mediaTimeFromStream(10, -1, 1), 10);
   assert.equal(mediaTimeFromStream(10, 100, 1, 50), 50);
+});
+
+test("frame timestamps follow the stream fps (NTSC rates included)", () => {
+  assert.equal(frameTimestampUs(60, 60), 1000000);
+  assert.equal(frameTimestampUs(1, 60), 16667);
+  assert.equal(frameTimestampUs(24, 24), 1000000);
+  assert.equal(frameTimestampUs(30000, 30000 / 1001), 1001000000);
+  assert.equal(frameTimestampUs(5, 0), frameTimestampUs(5)); // unknown → 30
+  assert.equal(frameDurationUs(60), 1e6 / 60);
+  assert.equal(frameDurationUs(0), 1e6 / 30);
+});
+
+test("parseFrameRate / pickSourceFps", () => {
+  assert.equal(parseFrameRate("30000/1001"), 30000 / 1001);
+  assert.equal(parseFrameRate("25/1"), 25);
+  assert.equal(parseFrameRate("0/0"), 0);
+  assert.equal(parseFrameRate(""), 0);
+  assert.equal(parseFrameRate("garbage"), 0);
+  assert.equal(pickSourceFps("24000/1001", "24000/1001"), 24000 / 1001);
+  assert.equal(pickSourceFps("0/0", "60/1"), 60); // avg missing → r_frame_rate
+  assert.equal(pickSourceFps("", "90000/1"), 0); // timebase nonsense
+});
+
+test("resolveOutputFps never exceeds the source content rate or 60", () => {
+  const r = (requested, sourceFps, speed = 1) => resolveOutputFps({ requested, sourceFps, speed });
+  assert.deepEqual(r("source", 24), { fps: 24, cap: 24 });
+  assert.deepEqual(r("source", 120), { fps: 60, cap: 60 });
+  assert.equal(r(60, 30000 / 1001).fps, 29.97003);
+  assert.equal(r(30, 60).fps, 30);
+  assert.equal(r(24, 60).fps, 24);
+  assert.equal(r(60, 25).fps, 25);
+  // Speed scales the content rate (setpts runs before the fps filter).
+  assert.deepEqual(r("source", 30, 2), { fps: 60, cap: 60 });
+  assert.deepEqual(r("source", 30, 0.5), { fps: 15, cap: 15 });
+  assert.equal(r(30, 30, 0.5).fps, 15);
+  // Unknown source: "source" → 30 (old behaviour), numbers are capped at 60 only.
+  assert.deepEqual(r("source", 0), { fps: 30, cap: 30 });
+  assert.equal(r(60, 0).fps, 60);
+  assert.equal(r(500, 0).fps, 60);
+  assert.equal(normalizeFpsRequest("auto"), "source");
+  assert.equal(normalizeFpsRequest(null), "source");
+  assert.equal(normalizeFpsRequest("abc"), "source");
+  assert.equal(normalizeFpsRequest("24"), 24);
+  assert.equal(normalizeFpsRequest(1), 5);
+});
+
+test("ffmpegFpsArg: integers stay integers, NTSC rates become N/1001", () => {
+  assert.equal(ffmpegFpsArg(30), "30");
+  assert.equal(ffmpegFpsArg(30000 / 1001), "30000/1001");
+  assert.equal(ffmpegFpsArg(29.97003), "30000/1001");
+  assert.equal(ffmpegFpsArg(24000 / 1001), "24000/1001");
+  assert.equal(ffmpegFpsArg(12000 / 1001), "12000/1001");
+  assert.equal(ffmpegFpsArg(12.5), "12.5");
+  assert.equal(ffmpegFpsArg(37.5), "37.5");
+});
+
+test("H.264 level follows macroblock rate; client codec fallback agrees with the server", () => {
+  assert.equal(h264LevelFor(1280, 720, 30).level, "3.1");
+  assert.equal(h264LevelFor(1280, 720, 60).level, "3.2");
+  assert.equal(h264LevelFor(1920, 1080, 30).level, "4.0");
+  assert.equal(h264LevelFor(1920, 1080, 60).level, "4.2");
+  assert.equal(h264LevelFor(854, 480, 60).level, "3.1");
+  for (const q of [360, 480, 720, 1080]) {
+    for (const fps of [12, 24, 30000 / 1001, 30, 50, 60]) {
+      assert.equal(codecForQuality(q, fps), webCodecsVideoParams(q, fps).codec, `${q}p${fps}`);
+    }
+  }
+  assert.equal(webCodecsVideoParams(1080, 60).codec, "avc1.42E02A");
+  assert.equal(webCodecsVideoParams(720, 60).codec, "avc1.42E020");
+  assert.equal(scaledBitrateKbps(2200, 30), 2200);
+  assert.ok(scaledBitrateKbps(2200, 60) > 3000 && scaledBitrateKbps(2200, 60) < 3500);
+  assert.ok(scaledBitrateKbps(2200, 24) < 2200);
+});
+
+test("buildWebCodecsFfmpegArgs: fps drives the fps filter, GOP, level and bitrate", () => {
+  const args = buildWebCodecsFfmpegArgs({ input: "x", quality: 720, fps: 60 });
+  const at = (flag) => args[args.indexOf(flag) + 1];
+  assert.match(at("-vf"), /^fps=60:start_time=0,scale=1280:720:/);
+  assert.equal(at("-g"), "120");
+  assert.equal(at("-level:v"), "3.2");
+  assert.equal(at("-b:v"), `${scaledBitrateKbps(2200, 60)}k`);
+  const ntsc = buildWebCodecsFfmpegArgs({ input: "x", fps: 24000 / 1001 });
+  assert.match(ntsc[ntsc.indexOf("-vf") + 1], /^fps=24000\/1001:start_time=0,/);
+  assert.equal(ntsc[ntsc.indexOf("-g") + 1], "48");
+});
+
+test("autoFpsLadder halves down to ~12 fps", () => {
+  assert.deepEqual(autoFpsLadder(60), [60, 30, 15]);
+  assert.deepEqual(autoFpsLadder(30), [30, 15]);
+  assert.deepEqual(autoFpsLadder(24), [24, 12]);
+  assert.deepEqual(autoFpsLadder(50), [50, 25, 12.5]);
+  assert.deepEqual(autoFpsLadder(15), [15]);
+  assert.deepEqual(autoFpsLadder(0), [30, 15]);
+  const ntsc = autoFpsLadder(60000 / 1001);
+  assert.equal(ntsc.length, 3);
+  assert.equal(ffmpegFpsArg(ntsc[1]), "30000/1001");
+});
+
+const healthy = {
+  active: true,
+  dtSec: 1,
+  presented: 30,
+  late: 0,
+  decodeQueue: 1,
+  aheadSec: 20,
+  arrivalRate: 0,
+  underruns: 0,
+  catchUps: 0,
+  ended: false
+};
+const lagging = { ...healthy, presented: 20, late: 10 };
+
+test("classifyHealthSample", () => {
+  assert.equal(classifyHealthSample({ ...healthy, active: false }), "skip");
+  assert.equal(classifyHealthSample(healthy), "good");
+  assert.equal(classifyHealthSample(lagging), "bad");
+  assert.equal(classifyHealthSample({ ...healthy, presented: 2, late: 3 }), "good"); // too few frames
+  assert.equal(classifyHealthSample({ ...healthy, underruns: 1 }), "bad");
+  assert.equal(classifyHealthSample({ ...healthy, catchUps: 1 }), "bad");
+  assert.equal(classifyHealthSample({ ...healthy, decodeQueue: 20 }), "bad");
+  // Arriving slower than real time with little buffered: the pipe can't keep up.
+  assert.equal(classifyHealthSample({ ...healthy, aheadSec: 2, arrivalRate: 0.6 }), "bad");
+  assert.equal(classifyHealthSample({ ...healthy, aheadSec: 2, arrivalRate: 0.6, ended: true }), "good");
+  // Not starving, but no clear headroom either.
+  assert.equal(classifyHealthSample({ ...healthy, aheadSec: 5, arrivalRate: 1 }), "neutral");
+  assert.equal(classifyHealthSample({ ...healthy, aheadSec: 5, arrivalRate: 1.5 }), "good");
+});
+
+function run(state, samples, levels) {
+  const actions = [];
+  for (const sample of samples) {
+    const res = stepAutoFps(state, sample, levels);
+    state = res.state;
+    if (res.action) actions.push(res.action);
+  }
+  return { state, actions };
+}
+const times = (n, sample) => Array.from({ length: n }, () => sample);
+
+test("stepAutoFps: warm-up, sustained trouble steps down, isolated bad seconds don't", () => {
+  const t = AUTO_FPS_TUNING;
+  // Bad seconds inside the warm-up are ignored.
+  let r = run(createAutoFpsState(), times(t.warmupSec, lagging), 3);
+  assert.deepEqual(r.actions, []);
+  // After warm-up: 3 bad seconds in a row → down.
+  r = run(r.state, times(t.badWindows, lagging), 3);
+  assert.deepEqual(r.actions, ["down"]);
+  assert.equal(r.state.level, 1);
+  // Alternating bad/good never steps down.
+  const s = { ...createAutoFpsState(), activeSec: 100 };
+  r = run(s, [lagging, healthy, lagging, healthy, lagging, lagging, healthy, lagging], 3);
+  assert.deepEqual(r.actions, []);
+  // Skipped samples (paused/hidden) don't count toward anything.
+  r = run(s, times(50, { ...lagging, active: false }), 3);
+  assert.deepEqual(r.actions, []);
+  // Bottom of the ladder: no further down.
+  r = run({ ...s, level: 2 }, times(10, lagging), 3);
+  assert.deepEqual(r.actions, []);
+});
+
+test("stepAutoFps: steps up after sustained headroom, backs off when a step up fails", () => {
+  const t = AUTO_FPS_TUNING;
+  const startDown = { ...createAutoFpsState(), level: 1 };
+  let r = run(startDown, times(t.warmupSec + t.upAfterSec, healthy), 3);
+  assert.deepEqual(r.actions, ["up"]);
+  assert.equal(r.state.level, 0);
+  // The step up fails quickly → down again and the next up waits twice as long.
+  r = run(r.state, times(t.warmupSec + t.badWindows, lagging), 3);
+  assert.deepEqual(r.actions, ["down"]);
+  assert.equal(r.state.upAfterSec, t.upAfterSec * 2);
+  let r2 = run(r.state, times(t.warmupSec + t.upAfterSec, healthy), 3);
+  assert.deepEqual(r2.actions, []);
+  r2 = run(r2.state, times(t.upAfterSec, healthy), 3);
+  assert.deepEqual(r2.actions, ["up"]);
+  // Surviving the failure window resets the wait.
+  r2 = run(r2.state, times(t.failedUpWindowSec, healthy), 3);
+  assert.equal(r2.state.upAfterSec, t.upAfterSec);
+  // Neutral seconds neither step up nor down.
+  const neutral = { ...healthy, aheadSec: 5, arrivalRate: 1 };
+  r = run(startDown, times(200, neutral), 3);
+  assert.deepEqual(r.actions, []);
+  // A restart re-enters warm-up.
+  assert.equal(restartAutoFpsWarmup({ ...startDown, activeSec: 50, badStreak: 2 }).activeSec, 0);
+});
+
+test("fps setting parsing and labels", () => {
+  assert.equal(parseFpsSetting(null), 24);
+  assert.equal(parseFpsSetting(null), DEFAULT_FPS_SETTING);
+  assert.equal(parseFpsSetting(""), 24);
+  assert.equal(parseFpsSetting("auto"), "auto");
+  assert.equal(parseFpsSetting("24"), 24);
+  assert.equal(parseFpsSetting("source"), "source");
+  assert.equal(parseFpsSetting("30"), 30);
+  assert.equal(parseFpsSetting("45"), 24);
+  assert.equal(formatFps(30), "30");
+  assert.equal(formatFps(30000 / 1001), "29.97");
+  assert.equal(formatFps(0), "");
 });

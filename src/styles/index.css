@@ -9,3 +9,4 @@
 @import "./mobile.css"; /* Mobile bottom nav, mobile view mode, responsive breakpoints */
 @import "./webcodecs-player.css"; /* WebCodecs player chrome: .yt-* */
 @import "./theme-picker.css"; /* Color theme picker (navbar + side menu) */
+@import "./upload.css"; /* Upload page: folder picker, drop zone, queue */

@@ -980,7 +980,7 @@ export default function VideoPlayer({
           {onTogglePlayerMode && (
             <button
               type="button"
-              className={`ctrl-btn webcodecs-switch-btn ${isWebCodecsMode ? "active" : ""}`}
+              className="ctrl-btn webcodecs-switch-btn"
               onClick={onTogglePlayerMode}
               disabled={!webCodecsSupported && !isWebCodecsMode}
               title={
@@ -991,7 +991,7 @@ export default function VideoPlayer({
                     : "Switch to WebCodecs Video Player (D)"
               }
             >
-              {isWebCodecsMode ? "🎬 Standard Player" : "⚡ WebCodecs Player"}
+              {isWebCodecsMode ? "🎬 Use Standard Player" : "⚡ Use WebCodecs Player"}
             </button>
           )}
           <button

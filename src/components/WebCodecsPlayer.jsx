@@ -10,7 +10,8 @@ import React, {
   useImperativeHandle
 } from "react";
 import { APP_VERSION } from "../version";
-import { formatPlayerTime } from "./webcodecs/playerUtils";
+import { readString, writeString } from "../lib/storage";
+import { formatFps, formatPlayerTime, parseFpsSetting } from "./webcodecs/playerUtils";
 import SettingsMenu from "./webcodecs/SettingsMenu";
 import {
   PlayerTopBar,
@@ -24,8 +25,27 @@ import {
 import { WebCodecsEngine } from "./webcodecs/WebCodecsEngine";
 import { isWebCodecsSupported } from "./webcodecs/protocol";
 import { mediaTimeFromStream } from "./webcodecs/scheduler";
+import {
+  autoFpsLadder,
+  createAutoFpsState,
+  restartAutoFpsWarmup,
+  stepAutoFps
+} from "./webcodecs/autoFps";
 
 const MAX_VOLUME = 3;
+// Frame-rate setting ("auto" | "source" | "60" | "30" | "24"; default 24, see
+// DEFAULT_FPS_SETTING / parseFpsSetting in playerUtils). Kept here rather than in App.jsx
+// because it only matters to this player (VideoPlayer doesn't need to pass it through).
+const FPS_SETTING_KEY = "tylertube_webcodecs_fps";
+
+// What to ask the server for: Auto → its current ladder rung (rung 0 = "source").
+function fpsRequestFor(setting, autoState, ladder) {
+  if (setting === "auto") {
+    const level = autoState?.level || 0;
+    return level > 0 && ladder && ladder[level] ? ladder[level] : "source";
+  }
+  return setting;
+}
 
 const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   {
@@ -76,6 +96,13 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   const bufferTargetRef = useRef(2.0);
   const lastReportedSecondRef = useRef(-1);
   const restartFromEndRef = useRef(null);
+  // Tap-to-reveal: true when the current touch/pen press started while the controls were hidden.
+  const controlsHiddenNowRef = useRef(false);
+  const tapRevealOnlyRef = useRef(false);
+  const fpsSettingRef = useRef(null);
+  const autoFpsStateRef = useRef(createAutoFpsState());
+  const autoFpsLadderRef = useRef(null); // built from meta/reset fpsCap
+  const requestedFpsRef = useRef("source"); // last fps request sent to the server
 
   const [isPaused, setIsPaused] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
@@ -87,6 +114,9 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   const [volumePct, setVolumePct] = useState(100);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [quality, setQuality] = useState(720);
+  const [fpsSetting, setFpsSetting] = useState(() => parseFpsSetting(readString(FPS_SETTING_KEY)));
+  const [streamFps, setStreamFps] = useState(0); // output fps of the current stream (server)
+  if (fpsSettingRef.current === null) fpsSettingRef.current = fpsSetting;
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [syncOffsetMs, setSyncOffsetMs] = useState(0);
   const [fps, setFps] = useState(0);
@@ -306,6 +336,29 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     [sendRestart]
   );
 
+  // Ask the server for another output frame rate (restarts encoding at the current position).
+  const requestFps = useCallback(
+    (fpsValue) => {
+      if (requestedFpsRef.current === fpsValue) return;
+      const t = currentMediaTimeRef.current;
+      if (!sendRestart({ type: "fps", fps: fpsValue, currentTime: t })) return;
+      requestedFpsRef.current = fpsValue;
+      seekBaseTimeRef.current = t;
+    },
+    [sendRestart]
+  );
+
+  const handleSetFps = useCallback(
+    (value) => {
+      fpsSettingRef.current = value;
+      setFpsSetting(value);
+      writeString(FPS_SETTING_KEY, String(value));
+      if (value === "auto") autoFpsStateRef.current = createAutoFpsState();
+      requestFps(fpsRequestFor(value, autoFpsStateRef.current, autoFpsLadderRef.current));
+    },
+    [requestFps]
+  );
+
   const handleToggleLoop = useCallback(() => {
     const next = !loopEnabledRef.current;
     loopEnabledRef.current = next;
@@ -448,6 +501,11 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     currentMediaTimeRef.current = startSeek;
     mediaDurationRef.current = 0;
     lastReportedSecondRef.current = -1;
+    // Auto starts every video at the source rate; a fixed setting (default 24) is sent as-is,
+    // so the first request already carries the cap and no auto stepping happens.
+    autoFpsStateRef.current = createAutoFpsState();
+    autoFpsLadderRef.current = null;
+    requestedFpsRef.current = fpsRequestFor(fpsSettingRef.current, null, null);
 
     setIsPaused(false);
     setIsEnded(false);
@@ -466,7 +524,8 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
       `&quality=${currentQualityRef.current}` +
       `&speed=${playbackSpeedRef.current}` +
       `&seek=${startSeek.toFixed(2)}` +
-      `&loop=${loopEnabledRef.current ? "1" : "0"}`;
+      `&loop=${loopEnabledRef.current ? "1" : "0"}` +
+      `&fps=${encodeURIComponent(String(requestedFpsRef.current))}`;
 
     const applyStreamInfo = (msg) => {
       const sk = parseFloat(msg.seekTime) || 0;
@@ -488,6 +547,12 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         currentQualityRef.current = q;
         setQuality(q);
       }
+      const outFps = Number(msg.fps);
+      setStreamFps(outFps > 0 ? outFps : 0);
+      const cap = Number(msg.fpsCap);
+      const ladder = autoFpsLadderRef.current;
+      if (cap > 0 && (!ladder || ladder[0] !== cap)) autoFpsLadderRef.current = autoFpsLadder(cap);
+      autoFpsStateRef.current = restartAutoFpsWarmup(autoFpsStateRef.current);
       if (!isDraggingSeekRef.current) setDisplayTime(sk);
     };
 
@@ -576,6 +641,14 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
 
     const statsTimer = setInterval(() => {
       if (cancelled) return;
+      // Auto frame rate: one health sample per second; step the ladder on sustained trouble/headroom.
+      const health = engine.takeHealthSample();
+      const ladder = autoFpsLadderRef.current;
+      if (fpsSettingRef.current === "auto" && ladder) {
+        const res = stepAutoFps(autoFpsStateRef.current, health, ladder.length);
+        autoFpsStateRef.current = res.state;
+        if (res.action) requestFps(fpsRequestFor("auto", res.state, ladder));
+      }
       const s = engine.getStats();
       setFps(s.fps);
       setBufferedAheadSec(Math.max(0, s.bufferedAheadSec));
@@ -604,6 +677,11 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         `Source: ${displayChannelName} (VOD, WebCodecs)`,
         `Resolution: ${s.width}x${s.height} @ ${s.fps} fps`,
         `Quality / Speed: ${currentQualityRef.current}p / ${playbackSpeedRef.current}x`,
+        `Frame Rate: ${formatFps(s.streamFps) || "?"} fps encoded (setting ${fpsSettingRef.current}${
+          fpsSettingRef.current === "auto"
+            ? `, level ${autoFpsStateRef.current.level}, ${s.lateFrames} late`
+            : ""
+        })`,
         `Decoder: ${s.decoderState} ${s.codec} (decode queue ${s.decodeQueueSize})`,
         `Frame Queue: ${s.framesQueued} decoded / ${s.encodedQueued} encoded`,
         `Dropped Frames: ${s.droppedFrames} of ${s.decodedFrames} (catch-ups ${s.catchUps}, pre-key ${s.skippedBeforeKey}, errors ${s.decodeErrors})`,
@@ -718,8 +796,23 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isHidden, isPseudoFullscreen, togglePlayPause, skipBy, handleSetVolume, handleToggleFullscreen, seekTo]);
 
-  // Canvas single-click (play/pause) & double-click (skip -10s / +10s / fullscreen)
+  // Canvas single-click (play/pause) & double-click (skip -10s / +10s / fullscreen).
+  // Touch/pen: a tap while the controls are hidden only reveals them (no pause). Mouse keeps
+  // toggling: hovering already shows the controls, and a still mouse should still click-pause.
+  // The snapshot is taken on press, before the player's touchstart/mousemove reveal them.
+  const handleCanvasPointerDown = (e) => {
+    tapRevealOnlyRef.current = e.pointerType !== "mouse" && controlsHiddenNowRef.current;
+  };
+  const handleCanvasTouchStart = () => {
+    // Browsers without Pointer Events; otherwise pointerdown already set the same snapshot.
+    if (typeof window !== "undefined" && !window.PointerEvent) {
+      tapRevealOnlyRef.current = controlsHiddenNowRef.current;
+    }
+  };
+
   const handleCanvasClick = (e) => {
+    const revealOnly = tapRevealOnlyRef.current;
+    tapRevealOnlyRef.current = false;
     if (settingsOpen) {
       setSettingsOpen(false);
       return;
@@ -735,7 +828,11 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
       else handleToggleFullscreen();
       return;
     }
-    lastTapTimeRef.current = now;
+    lastTapTimeRef.current = now; // a reveal tap can still start a double-tap
+    if (revealOnly) {
+      showControlsTemporarily();
+      return;
+    }
     clickToggleTimerRef.current = setTimeout(() => togglePlayPause(true), 220);
   };
 
@@ -799,8 +896,8 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
             This browser has no WebCodecs VideoDecoder. Use the Standard player.
           </div>
           {onSwitchToStandard && (
-            <button type="button" className="yt-stop-btn" onClick={onSwitchToStandard}>
-              🎬 Standard
+            <button type="button" className="yt-standard-btn" onClick={onSwitchToStandard}>
+              Use Standard Player
             </button>
           )}
         </div>
@@ -810,12 +907,14 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
 
   const playedPct = duration > 0 ? Math.max(0, Math.min(100, (displayTime / duration) * 100)) : 0;
   const syncLabelTxt = (syncOffsetMs > 0 ? "+" : "") + syncOffsetMs + "ms";
+  const controlsAreHidden = controlsHidden && !isPaused && !settingsOpen && !isDraggingSeek;
+  controlsHiddenNowRef.current = controlsAreHidden;
 
   return (
     <div
       ref={playerBoxRef}
       className={`yt-drive-player yt-webcodecs-player ${isPaused ? "paused" : ""} ${
-        controlsHidden && !isPaused && !settingsOpen && !isDraggingSeek ? "controls-hidden" : ""
+        controlsAreHidden ? "controls-hidden" : ""
       } ${isPseudoFullscreen ? "pseudo-fullscreen" : ""}`}
       onMouseMove={showControlsTemporarily}
       onTouchStart={showControlsTemporarily}
@@ -832,7 +931,13 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         statusText={statusText}
       />
 
-      <div className="yt-canvas-ClickArea" ref={canvasHostRef} onClick={handleCanvasClick} />
+      <div
+        className="yt-canvas-ClickArea"
+        ref={canvasHostRef}
+        onPointerDown={handleCanvasPointerDown}
+        onTouchStart={handleCanvasTouchStart}
+        onClick={handleCanvasClick}
+      />
 
       {isBuffering && !isPaused && <BufferingOverlay bufferedAheadSec={bufferedAheadSec} />}
 
@@ -845,6 +950,8 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         open={settingsOpen}
         playbackSpeed={playbackSpeed}
         quality={quality}
+        fpsSetting={fpsSetting}
+        streamFps={streamFps}
         bufferMode={bufferMode}
         bufferTarget={bufferTargetRef.current}
         syncLabelTxt={syncLabelTxt}
@@ -852,6 +959,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         statsOpen={statsOpen}
         onSetSpeed={handleSetSpeed}
         onSetQuality={handleSetQuality}
+        onSetFps={handleSetFps}
         onSetBufferTarget={handleSetBufferTarget}
         onAdjustSync={handleAdjustSync}
         onResetSync={handleResetSync}

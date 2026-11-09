@@ -21,3 +21,34 @@ export const BUFFER_OPTIONS = [
   { label: "2s (Normal)", target: 2.0 },
   { label: "5s (Mobile / Deep)", target: 5.0 }
 ];
+
+// Frame-rate setting: "auto" (adaptive), "source" (every source frame, max 60) or a cap.
+// The server never outputs more than the source rate, whatever is chosen. Default is a 24 fps
+// cap (DEFAULT_FPS_SETTING); "auto" stays selectable.
+export const FPS_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "source", label: "Source" },
+  { value: 60, label: "60" },
+  { value: 30, label: "30" },
+  { value: 24, label: "24" }
+];
+
+// Used when nothing (or an unknown value) is stored.
+export const DEFAULT_FPS_SETTING = 24;
+
+// Stored setting string → option value (DEFAULT_FPS_SETTING when missing/unknown).
+export function parseFpsSetting(raw) {
+  const str = String(raw ?? "").trim();
+  for (const opt of FPS_OPTIONS) {
+    if (String(opt.value) === str) return opt.value;
+  }
+  return DEFAULT_FPS_SETTING;
+}
+
+// 30 → "30", 29.97003 → "29.97", 0/unknown → "".
+export function formatFps(fps) {
+  const f = Number(fps);
+  if (!(f > 0)) return "";
+  if (Math.abs(f - Math.round(f)) < 0.01) return String(Math.round(f));
+  return String(Math.round(f * 100) / 100);
+}

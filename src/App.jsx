@@ -5,9 +5,12 @@ import VideoPlayer from "./components/VideoPlayer";
 import VideoGrid from "./components/VideoGrid";
 import HistoryPage from "./components/HistoryPage";
 import FavoritesPage from "./components/FavoritesPage";
+import UploadPage from "./components/UploadPage";
 import { VIDEO_LIBRARY } from "./data/videos";
 import { COLOR_THEMES } from "./data/themeColors";
-import { readJSON, writeString, writeJSON, removeKey } from "./lib/storage";
+import { readJSON, readString, writeString, writeJSON } from "./lib/storage";
+import { createSyncStore } from "./lib/sync";
+import { fetchVisitors, recordVisit } from "./lib/visitors";
 import { isWebCodecsSupported } from "./components/webcodecs/protocol";
 
 const STORAGE_KEY = "tylertube_watch_progress";
@@ -17,6 +20,36 @@ const THEME_STORAGE_KEY = "tylertube_theme";
 const COLOR_THEME_STORAGE_KEY = "tylertube_color_theme";
 const SIDE_PLAYER_STORAGE_KEY = "tylertube_side_player_prefs";
 const VIEW_MODE_STORAGE_KEY = "tylertube_view_mode";
+const SYNC_META_STORAGE_KEY = "tylertube_sync_meta";
+// Upload page (server/upload.js): the upload key, per device and never synced.
+const UPLOAD_KEY_STORAGE_KEY = "tylertube_upload_key";
+// Visitor log (server/visitors.js): this browser's visitor id and optional display name.
+const VISITOR_KEYS = { idKey: "tylertube_visitor_id", nameKey: "tylertube_visitor_name" };
+
+// Progress, favorites, last video and theme are mirrored to /api/state so they survive an
+// origin change (new tunnel URL) and follow you across devices. View mode, side-player prefs
+// and player settings stay per device. main.jsx awaits syncStore.initialSync() before render.
+export const syncStore = createSyncStore({
+  progressKey: STORAGE_KEY,
+  metaKey: SYNC_META_STORAGE_KEY,
+  fields: {
+    favorites: { key: FAVORITES_STORAGE_KEY, json: true },
+    lastVideoId: { key: LAST_VIDEO_STORAGE_KEY },
+    theme: { key: THEME_STORAGE_KEY },
+    colorTheme: { key: COLOR_THEME_STORAGE_KEY }
+  }
+});
+
+function progressEntryChanged(prevEntry, nextEntry) {
+  return (
+    !prevEntry ||
+    prevEntry.time !== nextEntry.time ||
+    prevEntry.duration !== nextEntry.duration ||
+    Boolean(prevEntry.completed) !== nextEntry.completed ||
+    Boolean(prevEntry.watched) !== nextEntry.watched ||
+    Boolean(prevEntry.hiddenFromHistory) !== nextEntry.hiddenFromHistory
+  );
+}
 
 function detectInitialViewMode() {
   try {
@@ -105,7 +138,34 @@ export default function App() {
     getInitialVideoId(watchProgress)
   );
   const [currentPage, setCurrentPage] = useState("home");
+  const [uploadPageOpened, setUploadPageOpened] = useState(false);
+  if (currentPage === "upload" && !uploadPageOpened) setUploadPageOpened(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [visitors, setVisitors] = useState(null); // null = not loaded / unavailable
+  const [selfVisitor, setSelfVisitor] = useState(null);
+
+  // Log this visit once per page load; refresh the list whenever the menu opens.
+  useEffect(() => {
+    recordVisit(VISITOR_KEYS).then((v) => v && setSelfVisitor(v));
+  }, []);
+
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    let cancelled = false;
+    fetchVisitors().then((list) => {
+      if (!cancelled && list) setVisitors(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isMenuOpen]);
+
+  const handleVisitorNameChange = useCallback(async (name) => {
+    const v = await recordVisit(VISITOR_KEYS, name);
+    if (!v) return;
+    setSelfVisitor(v);
+    setVisitors((prev) => (prev ? prev.map((p) => (p.id === v.id ? v : p)) : prev));
+  }, []);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCourse, setSelectedCourse] = useState("ALL");
   const [selectedSection, setSelectedSection] = useState("ALL");
@@ -234,7 +294,9 @@ export default function App() {
 
   useEffect(() => {
     if (!currentVideo?.id) return;
+    if (readString(LAST_VIDEO_STORAGE_KEY) === currentVideo.id) return;
     writeString(LAST_VIDEO_STORAGE_KEY, currentVideo.id);
+    syncStore.touch("lastVideoId");
   }, [currentVideo?.id]);
 
   const activePlaylist =
@@ -326,6 +388,10 @@ export default function App() {
           : Boolean(prevEntry?.hiddenFromHistory),
         updatedAt: isGenuineWatch ? Date.now() : prevEntry?.updatedAt || 0
       };
+      // Only a real change bumps modifiedAt (sync conflict resolution), so a stale device
+      // re-reporting the same position can't override a newer one from another device.
+      const changed = progressEntryChanged(prevEntry, nextEntry);
+      nextEntry.modifiedAt = changed ? Date.now() : prevEntry.modifiedAt || 0;
 
       const updated = {
         ...prev,
@@ -333,6 +399,7 @@ export default function App() {
       };
 
       writeJSON(STORAGE_KEY, updated);
+      if (changed) syncStore.touchProgress();
 
       // Avoid excessive React re-renders during smooth playback unless second changed or forced
       if (
@@ -363,10 +430,12 @@ export default function App() {
           completed: false,
           watched: true,
           hiddenFromHistory: false,
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
+          modifiedAt: Date.now()
         }
       };
       writeJSON(STORAGE_KEY, updated);
+      syncStore.touchProgress();
       return updated;
     });
   }, []);
@@ -383,30 +452,35 @@ export default function App() {
           completed: false,
           watched: false,
           hiddenFromHistory: true,
-          updatedAt: 0
+          updatedAt: 0,
+          modifiedAt: Date.now()
         }
       };
       writeJSON(STORAGE_KEY, updated);
+      syncStore.touchProgress();
       return updated;
     });
   }, []);
 
   const handleClearHistory = useCallback(() => {
     setWatchProgress((prev) => {
+      // Every entry becomes a hidden tombstone (rather than being dropped) so the server copy,
+      // which never deletes by omission, gets cleared too.
       const updated = {};
+      const now = Date.now();
       for (const [id, entry] of Object.entries(prev)) {
-        if (entry?.duration > 0) {
-          updated[id] = {
-            time: 0,
-            duration: entry.duration,
-            completed: false,
-            watched: false,
-            hiddenFromHistory: true,
-            updatedAt: 0
-          };
-        }
+        updated[id] = {
+          time: 0,
+          duration: entry?.duration > 0 ? entry.duration : 0,
+          completed: false,
+          watched: false,
+          hiddenFromHistory: true,
+          updatedAt: 0,
+          modifiedAt: now
+        };
       }
       writeJSON(STORAGE_KEY, updated);
+      syncStore.touchProgress();
       return updated;
     });
   }, []);
@@ -421,13 +495,37 @@ export default function App() {
         next[videoId] = { addedAt: Date.now() };
       }
       writeJSON(FAVORITES_STORAGE_KEY, next);
+      syncStore.touch("favorites");
       return next;
     });
   }, []);
 
   const handleClearFavorites = useCallback(() => {
     setFavorites({});
-    removeKey(FAVORITES_STORAGE_KEY);
+    // Written as {} (not removed) so the cleared state syncs.
+    writeJSON(FAVORITES_STORAGE_KEY, {});
+    syncStore.touch("favorites");
+  }, []);
+
+  const handleColorThemeChange = useCallback((nextColorTheme) => {
+    setColorTheme(nextColorTheme);
+    syncStore.touch("colorTheme");
+  }, []);
+
+  // Back on the tab (or the app on a phone): pick up changes made on other devices.
+  useEffect(() => {
+    const handleVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      syncStore.pull().then((changed) => {
+        if (!changed) return;
+        setWatchProgress(loadSavedWatchProgress());
+        setFavorites(loadSavedFavorites());
+        setTheme((prev) => readString(THEME_STORAGE_KEY) || prev);
+        setColorTheme((prev) => readString(COLOR_THEME_STORAGE_KEY) || prev);
+      });
+    };
+    document.addEventListener("visibilitychange", handleVisible);
+    return () => document.removeEventListener("visibilitychange", handleVisible);
   }, []);
 
   useEffect(() => {
@@ -491,6 +589,7 @@ export default function App() {
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
+    syncStore.touch("theme");
   }, []);
 
   // D / player buttons toggle standard ↔ webcodecs (webcodecs only where supported).
@@ -538,7 +637,7 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         colorTheme={colorTheme}
-        onColorThemeChange={setColorTheme}
+        onColorThemeChange={handleColorThemeChange}
         onToggleMenu={() => setIsMenuOpen((prev) => !prev)}
         currentPage={currentPage}
         onNavigate={setCurrentPage}
@@ -553,12 +652,15 @@ export default function App() {
         onViewModeChange={handleViewModeChange}
         theme={theme}
         colorTheme={colorTheme}
-        onColorThemeChange={setColorTheme}
+        onColorThemeChange={handleColorThemeChange}
         totalVideosCount={VIDEO_LIBRARY.length}
         historyCount={historyItems.length}
         favoritesCount={favoriteItems.length}
         inProgressCount={inProgressCount}
         completedCount={completedCount}
+        visitors={visitors}
+        selfVisitor={selfVisitor}
+        onVisitorNameChange={handleVisitorNameChange}
       />
 
       <main
@@ -637,6 +739,16 @@ export default function App() {
             onClearFavorites={handleClearFavorites}
             onNavigateHome={() => setCurrentPage("home")}
           />
+        )}
+
+        {/* Stays mounted once opened, so uploads keep running while you browse. */}
+        {uploadPageOpened && (
+          <div hidden={currentPage !== "upload"}>
+            <UploadPage
+              keyStorageKey={UPLOAD_KEY_STORAGE_KEY}
+              onNavigateHome={() => setCurrentPage("home")}
+            />
+          </div>
         )}
       </main>
 

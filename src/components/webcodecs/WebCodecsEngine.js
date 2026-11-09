@@ -7,10 +7,13 @@
 // and video presents the frame due at (ctx.currentTime - outputLatency - anchor + syncOffset).
 // Video cannot drift from audio because both read the same clock. While audio is locked or
 // absent, a performance.now() clock stands in and audio takes over (re-anchored) once running.
+// AudioContext.currentTime only advances once per audio device callback (~10 ms on macOS,
+// 20-40+ ms on Linux/Android), so it is smoothed with performance.now() (audioClockNow()).
 import {
   WC_AUDIO_RATE,
   WC_FRAME_US,
   codecForQuality,
+  frameDurationUs,
   parseBinaryMessage
 } from "./protocol";
 import {
@@ -29,6 +32,11 @@ import {
 const PUMP_MS = 50;
 const RAF_STALE_MS = 250;
 const AUDIO_GAP_VIDEO_SEC = 3;
+// Smoothed audio clock: how fast the tracked ctx-vs-perf offset may sink (s per s; real clock
+// drift is ~0.0001), and how far it may run ahead of raw currentTime before snapping back
+// (audio thread stalled).
+const AUDIO_CLOCK_DECAY = 0.002;
+const AUDIO_CLOCK_MAX_LEAD_SEC = 0.1;
 
 export class WebCodecsEngine {
   constructor({ url, canvas, callbacks = {} }) {
@@ -46,6 +54,9 @@ export class WebCodecsEngine {
 
     // Stream state (reset on meta/reset)
     this.codec = codecForQuality(720);
+    this.frameUs = WC_FRAME_US; // per stream, from meta/reset fps
+    this.streamFps = 0;
+    this.streamGen = 0; // bumps on every stream (re)start; health samples across one are void
     this.hasAudio = true;
     this.awaitingReset = false;
     this.serverEnded = false;
@@ -71,6 +82,8 @@ export class WebCodecsEngine {
     this.anchorCtx = 0;
     this.perfBaseSec = 0;
     this.perfStartMs = 0;
+    this.acOffset = null; // smoothed (ctx.currentTime - performance.now()) in seconds
+    this.acLastPerf = 0;
     this.frozenSec = 0;
     this.buffering = true;
     this.audioGap = false;
@@ -81,6 +94,7 @@ export class WebCodecsEngine {
       decodedFrames: 0,
       presentedFrames: 0,
       droppedFrames: 0,
+      lateFrames: 0, // decoded but past due when presented (subset of droppedFrames)
       skippedBeforeKey: 0,
       catchUps: 0,
       decodeErrors: 0,
@@ -91,6 +105,7 @@ export class WebCodecsEngine {
       fpsWindowStart: performance.now()
     };
 
+    this.healthPrev = null;
     this.decoder = null;
     this.decoderGen = 0;
     this.lastRafMs = 0;
@@ -204,7 +219,11 @@ export class WebCodecsEngine {
     this.playbackEnded = false;
     if (typeof msg.hasAudio === "boolean") this.hasAudio = msg.hasAudio;
     const q = parseInt(msg.quality, 10);
-    this.codec = msg.videoCodec || codecForQuality(q);
+    const fps = Number(msg.fps);
+    this.streamFps = fps > 0 ? fps : 0;
+    this.frameUs = frameDurationUs(fps);
+    this.codec = msg.videoCodec || codecForQuality(q, fps);
+    this.streamGen += 1;
     this.frozenSec = 0;
     this.running = false;
     this.hadFirstStart = false;
@@ -385,16 +404,36 @@ export class WebCodecsEngine {
   }
 
   videoEndSec() {
-    return this.lastReceivedVideoUs < 0 ? 0 : (this.lastReceivedVideoUs + WC_FRAME_US) / 1e6;
+    return this.lastReceivedVideoUs < 0 ? 0 : (this.lastReceivedVideoUs + this.frameUs) / 1e6;
   }
 
   // Heard position on the stream timeline (seconds).
   getStreamTime() {
     if (!this.running) return this.frozenSec;
     if (this.clockMode === "audio") {
-      return this.audioCtx.currentTime - this.outputLatency() - this.anchorCtx;
+      return this.audioClockNow() - this.outputLatency() - this.anchorCtx;
     }
     return this.perfBaseSec + (performance.now() - this.perfStartMs) / 1000;
+  }
+
+  // ctx.currentTime, interpolated between its coarse steps with performance.now(). Tracks the
+  // upper envelope of (currentTime - perf): each step re-raises it, it sinks only by
+  // AUDIO_CLOCK_DECAY in between, and snaps to raw if it runs too far ahead (audio stalled).
+  // Unsmoothed, frames due mid-step all fire at the next step → doubled/dropped frames.
+  audioClockNow() {
+    const raw = this.audioCtx.currentTime;
+    const perf = performance.now() / 1000;
+    const offRaw = raw - perf;
+    let off = this.acOffset;
+    if (off === null) {
+      off = offRaw;
+    } else {
+      off -= AUDIO_CLOCK_DECAY * Math.max(0, perf - this.acLastPerf);
+      if (offRaw > off || off - offRaw > AUDIO_CLOCK_MAX_LEAD_SEC) off = offRaw;
+    }
+    this.acOffset = off;
+    this.acLastPerf = perf;
+    return perf + off;
   }
 
   startClock(atSec) {
@@ -406,7 +445,8 @@ export class WebCodecsEngine {
     this.running = true;
     if (useAudio) {
       this.clockMode = "audio";
-      this.anchorCtx = this.audioCtx.currentTime + WC_AUDIO_LEAD_SEC - atSec;
+      this.acOffset = null;
+      this.anchorCtx = this.audioClockNow() + WC_AUDIO_LEAD_SEC - atSec;
     } else {
       this.clockMode = "perf";
       this.perfBaseSec = atSec;
@@ -546,10 +586,11 @@ export class WebCodecsEngine {
     }
 
     const ts = this.frames.map((f) => f.timestamp);
-    const idx = selectDueFrame(ts, clockUs, WC_FRAME_US / 2);
+    const idx = selectDueFrame(ts, clockUs, this.frameUs / 2);
     if (idx >= 0) {
       for (let i = 0; i < idx; i++) this.frames[i].close();
       this.stats.droppedFrames += idx;
+      if (draw) this.stats.lateFrames += idx;
       const f = this.frames[idx];
       this.frames.splice(0, idx + 1);
       if (draw) this.drawFrame(f);
@@ -713,6 +754,7 @@ export class WebCodecsEngine {
     if (!this.send(payload)) return false;
     if (needResume) this.send({ type: "resume" });
     this.awaitingReset = true;
+    this.streamGen += 1;
     this.freezeClock(0);
     this.flushMedia();
     this.serverEnded = false;
@@ -762,6 +804,51 @@ export class WebCodecsEngine {
     }
   }
 
+  // Per-interval playback health for the Auto frame-rate controller (webcodecs/autoFps.js).
+  // `active` is false for intervals spanning a stream restart, pause, initial buffering,
+  // a hidden tab or a throttled rAF (those drops say nothing about decode capacity).
+  takeHealthSample() {
+    const now = performance.now();
+    const s = this.stats;
+    const cur = {
+      at: now,
+      gen: this.streamGen,
+      presented: s.presentedFrames,
+      late: s.lateFrames,
+      underruns: s.underruns,
+      catchUps: s.catchUps,
+      videoEnd: this.videoEndSec()
+    };
+    const prev = this.healthPrev;
+    this.healthPrev = cur;
+    if (!prev) return { active: false, dtSec: 0 };
+    const dtSec = (now - prev.at) / 1000;
+    const underruns = cur.underruns - prev.underruns;
+    const visible = typeof document === "undefined" || document.visibilityState !== "hidden";
+    const active =
+      prev.gen === cur.gen &&
+      !this.paused &&
+      !this.awaitingReset &&
+      !this.playbackEnded &&
+      visible &&
+      now - this.lastRafMs <= RAF_STALE_MS &&
+      dtSec > 0.2 &&
+      dtSec < 5 &&
+      (this.running || underruns > 0);
+    return {
+      active,
+      dtSec,
+      presented: cur.presented - prev.presented,
+      late: cur.late - prev.late,
+      underruns,
+      catchUps: cur.catchUps - prev.catchUps,
+      decodeQueue: this.decoder ? this.decoder.decodeQueueSize : 0,
+      aheadSec: this.lastAheadSec || 0,
+      arrivalRate: dtSec > 0 ? Math.max(0, cur.videoEnd - prev.videoEnd) / dtSec : 0,
+      ended: this.serverEnded
+    };
+  }
+
   getStats() {
     const d = this.decoder;
     const clockSec = this.getStreamTime();
@@ -781,6 +868,8 @@ export class WebCodecsEngine {
       height: this.canvas.height,
       fps: this.stats.fps,
       droppedFrames: this.stats.droppedFrames,
+      lateFrames: this.stats.lateFrames,
+      streamFps: this.streamFps,
       decodedFrames: this.stats.decodedFrames,
       presentedFrames: this.stats.presentedFrames,
       skippedBeforeKey: this.stats.skippedBeforeKey,

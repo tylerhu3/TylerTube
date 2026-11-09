@@ -225,11 +225,11 @@ export function ControlBar({
         {onSwitchToStandard && (
           <button
             type="button"
-            className="yt-stop-btn"
+            className="yt-standard-btn"
             onClick={onSwitchToStandard}
             title="Switch back to Standard Player (D)"
           >
-            🎬 Standard
+            Use Standard Player
           </button>
         )}
       </div>

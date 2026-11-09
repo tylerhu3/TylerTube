@@ -19,6 +19,15 @@
     --active-btn-text: #ffffff;
     --active-card-ring: rgba(2, 132, 199, 0.28);
     --video-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    /* Status colors (upload queue): text, tinted background, border */
+    --danger: #dc2626;
+    --danger-bg: rgba(220, 38, 38, 0.1);
+    --danger-border: rgba(220, 38, 38, 0.35);
+    --warning: #b45309;
+    --warning-bg: rgba(217, 119, 6, 0.1);
+    --warning-border: rgba(217, 119, 6, 0.35);
+    --success: #16a34a;
+    --success-bg: rgba(22, 163, 74, 0.15);
     --thumb-bg: linear-gradient(135deg, #f2f2f2, #e5e5e5);
     --plyr-color-main: var(--accent);
     --radius: 12px;
@@ -44,6 +53,9 @@
     --active-btn-text: #0f0f0f;
     --active-card-ring: rgba(56, 189, 248, 0.35);
     --video-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+    --danger: #f87171;
+    --warning: #fbbf24;
+    --success: #4ade80;
     --thumb-bg: linear-gradient(135deg, #272727, #181818);
     --plyr-color-main: var(--accent);
     --radius: 12px;

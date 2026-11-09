@@ -1,11 +1,18 @@
 // Standalone Drive server for production: `npm run server` (no Vite).
 // Serves the /ws/mpeg1 WebSocket (server/drive-ws.js) on 127.0.0.1:$DRIVE_PORT (default 5180);
-// Nginx proxies /ws/mpeg1 here. GET /healthz → 200 for smoke tests; everything else → 404.
+// Nginx proxies /ws/mpeg1 and /api/ here. /api/state = synced user state (server/user-state.js),
+// /api/visit + /api/visitors = visitor log (server/visitors.js),
+// /api/upload* = uploads into public/videos (server/upload.js),
+// GET /healthz → 200 for smoke tests; everything else → 404.
 // In dev, the Vite plugin (server/plugin.js) attaches the same handler to :5173 instead.
 import fs from "node:fs";
 import http from "node:http";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { attachDriveWebSocketServer } from "./drive-ws.js";
+import { createUserStateHandler, createUserStateStore } from "./user-state.js";
+import { createVisitorStore, createVisitorsHandler, defaultGeolocate } from "./visitors.js";
+import { createUploadHandler, defaultUploadKey, signatureCatalogStatus } from "./upload.js";
+import { createUploadStore } from "./upload-store.js";
 
 export const DEFAULT_DRIVE_PORT = 5180;
 const SHUTDOWN_TIMEOUT_MS = 2000;
@@ -13,14 +20,40 @@ const SHUTDOWN_TIMEOUT_MS = 2000;
 // Relative to this file, not process.cwd(). (resolveLocalVideoFile's basename fallback still uses
 // cwd; npm and the launchd plist both run from the repo root.)
 const DEFAULT_VIDEOS_DIR = fileURLToPath(new URL("../public/videos", import.meta.url));
+// Gitignored. Override with TYLERTUBE_STATE_FILE.
+export const DEFAULT_STATE_FILE = fileURLToPath(new URL("../data/user-state.json", import.meta.url));
+// Gitignored. Override with TYLERTUBE_VISITORS_FILE.
+export const DEFAULT_VISITORS_FILE = fileURLToPath(new URL("../data/visitors.json", import.meta.url));
+
+// Optional GB override from the environment; undefined → the store's default (5 GB).
+function envGigabytes(name) {
+  const gb = parseFloat(process.env[name] || "");
+  return Number.isFinite(gb) && gb >= 0 ? gb * 1024 ** 3 : undefined;
+}
 
 export function startDriveServer({
   port = DEFAULT_DRIVE_PORT,
   host = "127.0.0.1",
-  videosDir = DEFAULT_VIDEOS_DIR
+  videosDir = DEFAULT_VIDEOS_DIR,
+  stateFile = process.env.TYLERTUBE_STATE_FILE || DEFAULT_STATE_FILE,
+  visitorsFile = process.env.TYLERTUBE_VISITORS_FILE || DEFAULT_VISITORS_FILE,
+  geolocate = defaultGeolocate(),
+  getUploadKey = defaultUploadKey(),
+  uploadReserveBytes = envGigabytes("TYLERTUBE_UPLOAD_RESERVE_GB")
 } = {}) {
-  const server = http.createServer((req, res) => {
+  const handleUserState = createUserStateHandler(createUserStateStore(stateFile));
+  const handleVisitors = createVisitorsHandler(createVisitorStore(visitorsFile, { geolocate }));
+  const uploadStore = createUploadStore({ videosDir, reserveBytes: uploadReserveBytes });
+  const handleUpload = createUploadHandler(uploadStore, {
+    getKey: getUploadKey,
+    catalogStatus: signatureCatalogStatus(videosDir)
+  });
+
+  const server = http.createServer(async (req, res) => {
     const [pathname] = (req.url || "").split("?");
+    if (await handleUserState(req, res)) return;
+    if (await handleVisitors(req, res)) return;
+    if (await handleUpload(req, res)) return;
     if (pathname === "/healthz" && (req.method === "GET" || req.method === "HEAD")) {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end(req.method === "HEAD" ? undefined : "ok\n");

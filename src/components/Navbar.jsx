@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
 import { COLOR_THEMES } from "../data/themeColors";
 
+const PAGE_LABELS = { history: "History", favorites: "Favorites", upload: "Upload" };
+
 export default function Navbar({
   searchQuery,
   onSearchChange,
@@ -106,7 +108,7 @@ export default function Navbar({
             <div className="nav-page-indicator">
               <span className="nav-page-divider">/</span>
               <span className="nav-page-name">
-                {currentPage === "history" ? "History" : "Favorites"}
+                {PAGE_LABELS[currentPage] || currentPage}
               </span>
             </div>
           )}
@@ -164,9 +166,7 @@ export default function Navbar({
           {onTogglePlayerMode && (
             <button
               type="button"
-              className={`btn-secondary player-mode-nav-btn ${
-                playerMode === "webcodecs" ? "active" : ""
-              }`}
+              className="btn-secondary player-mode-nav-btn"
               onClick={onTogglePlayerMode}
               title={
                 playerMode === "webcodecs"
@@ -178,9 +178,19 @@ export default function Navbar({
                 ? playerMode === "webcodecs"
                   ? "🎬"
                   : "⚡"
-                : playerMode === "webcodecs"
-                  ? "🎬 Standard Player"
-                  : "⚡ WebCodecs Player"}
+                : (
+                  <>
+                    {playerMode === "webcodecs" ? "🎬" : "⚡"}
+                    <span className="nav-btn-label">
+                      {playerMode === "webcodecs"
+                        ? "Use Standard Player"
+                        : "Use WebCodecs Player"}
+                    </span>
+                    <span className="nav-btn-label-short">
+                      {playerMode === "webcodecs" ? "Standard" : "WebCodecs"}
+                    </span>
+                  </>
+                )}
             </button>
           )}
 
@@ -191,7 +201,8 @@ export default function Navbar({
               onClick={onToggleSidePlayer}
               title="Toggle Floating Side Player (S)"
             >
-              ⧉ Side Player
+              ⧉<span className="nav-btn-label">Side Player</span>
+              <span className="nav-btn-label-short">Side</span>
             </button>
           )}
 
@@ -202,7 +213,8 @@ export default function Navbar({
               onClick={onToggleTheater}
               title="Toggle Theater Mode (T)"
             >
-              Theater Mode
+              <span className="nav-btn-label">Theater Mode</span>
+              <span className="nav-btn-label-short">Theater</span>
             </button>
           )}
 
@@ -273,7 +285,12 @@ export default function Navbar({
             title={isLight ? "Switch to Dark Mode" : "Switch to Light Mode"}
             aria-label={isLight ? "Switch to Dark Mode" : "Switch to Light Mode"}
           >
-            {isMobileMode ? (isLight ? "🌙" : "☀️") : isLight ? "🌙 Dark" : "☀️ Light"}
+            {isLight ? "🌙" : "☀️"}
+            {!isMobileMode && (
+              <span className="nav-btn-label theme-toggle-label">
+                {isLight ? "Dark" : "Light"}
+              </span>
+            )}
           </button>
         </div>
       </div>
