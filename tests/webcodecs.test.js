@@ -28,6 +28,13 @@ import {
   stepAutoFps
 } from "../src/components/webcodecs/autoFps.js";
 import {
+  HANDOFF_END_MARGIN_SEC,
+  backgroundHandoffNeeded,
+  clampVolume,
+  resumePosition,
+  shouldHandOff
+} from "../src/components/webcodecs/backgroundHandoff.js";
+import {
   DEFAULT_FPS_SETTING,
   formatFps,
   parseFpsSetting
@@ -424,4 +431,59 @@ test("fps setting parsing and labels", () => {
   assert.equal(formatFps(30), "30");
   assert.equal(formatFps(30000 / 1001), "29.97");
   assert.equal(formatFps(0), "");
+});
+
+test("background handoff: when to hand off", () => {
+  const base = { hidden: true, playing: true, ended: false, unlocked: true, supported: true };
+  assert.equal(shouldHandOff(base), true);
+  assert.equal(shouldHandOff({ ...base, hidden: false }), false);
+  assert.equal(shouldHandOff({ ...base, playing: false }), false);
+  assert.equal(shouldHandOff({ ...base, ended: true }), false);
+  assert.equal(shouldHandOff({ ...base, unlocked: false }), false);
+  assert.equal(shouldHandOff({ ...base, supported: false }), false);
+  assert.equal(shouldHandOff({ ...base, muted: true }), false);
+  assert.equal(shouldHandOff({ ...base, muted: false }), true);
+  // Nothing left to play near the end; unknown duration doesn't block.
+  assert.equal(shouldHandOff({ ...base, timeSec: 99.8, durationSec: 100 }), false);
+  assert.equal(shouldHandOff({ ...base, timeSec: 100 - HANDOFF_END_MARGIN_SEC - 1, durationSec: 100 }), true);
+  assert.equal(shouldHandOff({ ...base, timeSec: 500, durationSec: 0 }), true);
+});
+
+test("background handoff: resume position and volume clamp", () => {
+  assert.equal(resumePosition({ audioTimeSec: 42.5, durationSec: 100, ended: false }), 42.5);
+  assert.equal(resumePosition({ audioTimeSec: 120, durationSec: 100, ended: false }), 100);
+  assert.equal(resumePosition({ audioTimeSec: 10, durationSec: 100, ended: true }), 100);
+  assert.equal(resumePosition({ audioTimeSec: -3, durationSec: 100, ended: false }), 0);
+  assert.equal(resumePosition({ audioTimeSec: NaN, durationSec: 100, ended: false }), 0);
+  assert.equal(resumePosition({ audioTimeSec: 250, durationSec: 0, ended: false }), 250);
+  assert.equal(resumePosition({ audioTimeSec: 250, durationSec: 0, ended: true }), 250);
+  assert.equal(clampVolume(0.4), 0.4);
+  assert.equal(clampVolume(2.5), 1);
+  assert.equal(clampVolume(-1), 0);
+  assert.equal(clampVolume(undefined), 1);
+  assert.equal(clampVolume("0.5"), 0.5);
+});
+
+test("background handoff: only needed on touch-first mobile", () => {
+  const iphone =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+  const ipadDesktopUa =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+  const android =
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36";
+  const winChrome =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+  const tesla =
+    "Mozilla/5.0 (X11; GNU/Linux) AppleWebKit/537.36 (KHTML, like Gecko) Chromium/130.0 Chrome/130.0 Safari/537.36 Tesla/2024.44";
+  assert.equal(backgroundHandoffNeeded({ coarsePointer: true, maxTouchPoints: 5, ua: iphone }), true);
+  // iPadOS requesting the desktop site: Mac UA but touch points.
+  assert.equal(backgroundHandoffNeeded({ coarsePointer: true, maxTouchPoints: 5, ua: ipadDesktopUa }), true);
+  assert.equal(backgroundHandoffNeeded({ coarsePointer: false, maxTouchPoints: 0, ua: ipadDesktopUa }), false);
+  assert.equal(backgroundHandoffNeeded({ coarsePointer: true, maxTouchPoints: 5, ua: android }), true);
+  assert.equal(backgroundHandoffNeeded({ coarsePointer: false, maxTouchPoints: 0, ua: winChrome }), false);
+  // Touchscreen laptop: touch points but a desktop UA.
+  assert.equal(backgroundHandoffNeeded({ coarsePointer: true, maxTouchPoints: 10, ua: winChrome }), false);
+  assert.equal(backgroundHandoffNeeded({ coarsePointer: true, maxTouchPoints: 10, ua: tesla }), false);
+  assert.equal(backgroundHandoffNeeded({ coarsePointer: true, maxTouchPoints: 5, ua: "Foo Mobile Browser" }), true);
+  assert.equal(backgroundHandoffNeeded(), false);
 });

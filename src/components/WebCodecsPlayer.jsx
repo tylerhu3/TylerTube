@@ -23,6 +23,12 @@ import {
   ControlBar
 } from "./webcodecs/PlayerChrome";
 import { WebCodecsEngine } from "./webcodecs/WebCodecsEngine";
+import { BackgroundAudio } from "./webcodecs/backgroundAudio";
+import {
+  backgroundHandoffNeeded,
+  resumePosition,
+  shouldHandOff
+} from "./webcodecs/backgroundHandoff";
 import { isWebCodecsSupported } from "./webcodecs/protocol";
 import { mediaTimeFromStream } from "./webcodecs/scheduler";
 import {
@@ -33,6 +39,26 @@ import {
 } from "./webcodecs/autoFps";
 
 const MAX_VOLUME = 3;
+// A socket that closes this soon after the page became visible again (iOS may deliver the close
+// of a connection it killed in the background late) rebuilds the engine once.
+const AUTO_REBUILD_WINDOW_MS = 10000;
+
+// Background <audio> handoff only where Web Audio is suspended in the background (touch-first
+// mobile); desktop keeps the engine playing in a hidden tab.
+function detectBackgroundHandoffNeeded() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  let coarsePointer = false;
+  try {
+    coarsePointer = Boolean(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+  } catch {
+    coarsePointer = false;
+  }
+  return backgroundHandoffNeeded({
+    coarsePointer,
+    maxTouchPoints: navigator.maxTouchPoints || 0,
+    ua: navigator.userAgent || ""
+  });
+}
 // Frame-rate setting ("auto" | "source" | "60" | "30" | "24"; default 24, see
 // DEFAULT_FPS_SETTING / parseFpsSetting in playerUtils). Kept here rather than in App.jsx
 // because it only matters to this player (VideoPlayer doesn't need to pass it through).
@@ -103,6 +129,20 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   const autoFpsStateRef = useRef(createAutoFpsState());
   const autoFpsLadderRef = useRef(null); // built from meta/reset fpsCap
   const requestedFpsRef = useRef("source"); // last fps request sent to the server
+  // Background playback (webcodecs/backgroundAudio.js): hidden <audio> of the same MP4 that takes
+  // over while the page is hidden; the engine stays paused meanwhile.
+  const bgAudioRef = useRef(null); // BackgroundAudio, kept across files so its unlock persists
+  const handedOffRef = useRef(null); // { pausedExternally, started } while the <audio> plays for us
+  const handoffNeededRef = useRef(null); // touch-first mobile only (detectBackgroundHandoffNeeded)
+  if (handoffNeededRef.current === null) handoffNeededRef.current = detectBackgroundHandoffNeeded();
+  const pendingHandoffRef = useRef(null); // { fromFile }: bg <audio> ended while hidden → next file
+  // Dead-socket recovery (engine onDisconnected): when the page last became visible, whether that
+  // resume already used its one auto-rebuild, and whether the socket died while hidden.
+  const resumedAtRef = useRef(0);
+  const autoRebuildUsedRef = useRef(false);
+  const diedWhileHiddenRef = useRef(false);
+  const resumeOverrideRef = useRef(null); // { file, time, paused }: start of a rebuilt engine
+  const playbackEndedRef = useRef(null); // the current engine's onPlaybackEnded handler
 
   const [isPaused, setIsPaused] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
@@ -137,6 +177,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   const [skipRightLabel, setSkipRightLabel] = useState("");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPseudoFullscreen, setIsPseudoFullscreen] = useState(false);
+  const [reconnectKey, setReconnectKey] = useState(0); // bump → rebuild the engine (dead socket)
 
   useEffect(() => {
     onTimeUpdateRef.current = onTimeUpdate;
@@ -146,6 +187,8 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   }, [onTimeUpdate, onEnded, video?.id, savedTime]);
 
   const targetFile = video?.src || "";
+  const targetFileRef = useRef(targetFile);
+  targetFileRef.current = targetFile;
   const displayChannelName = video?.title || "";
 
   const sendWsCommand = useCallback((payload) => {
@@ -193,8 +236,13 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     }
   }, []);
 
-  const tryUnlockAudio = useCallback(() => {
+  const tryUnlockAudio = useCallback((ev) => {
     if (engineRef.current) engineRef.current.unlockAudio();
+    // The background <audio> needs a real gesture (iOS counts touchend/click/keydown, not
+    // touchstart); a failed unlock stays "none" and retries on the next one.
+    if (ev && ev.isTrusted && ev.type !== "touchstart" && bgAudioRef.current) {
+      bgAudioRef.current.unlock();
+    }
   }, []);
 
   const seekTo = useCallback(
@@ -458,13 +506,192 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   useEffect(() => {
     document.addEventListener("click", tryUnlockAudio, true);
     document.addEventListener("touchstart", tryUnlockAudio, true);
+    document.addEventListener("touchend", tryUnlockAudio, true);
     document.addEventListener("keydown", tryUnlockAudio, true);
     return () => {
       document.removeEventListener("click", tryUnlockAudio, true);
       document.removeEventListener("touchstart", tryUnlockAudio, true);
+      document.removeEventListener("touchend", tryUnlockAudio, true);
       document.removeEventListener("keydown", tryUnlockAudio, true);
     };
   }, [tryUnlockAudio]);
+
+  // ---------- Background playback handoff ----------
+  // Page hidden while playing → the hidden <audio> continues from the current position and the
+  // engine pauses (UI state untouched); page visible again → the engine resumes where the audio is.
+
+  // Stops the <audio> and clears the handoff; leaves its position in currentMediaTimeRef.
+  // Returns { time, pausedExternally } or null if nothing was handed off.
+  const endBackgroundHandoff = useCallback((ended = false) => {
+    const handoff = handedOffRef.current;
+    if (!handoff) return null;
+    handedOffRef.current = null;
+    const bg = bgAudioRef.current;
+    const stoppedAt = bg ? bg.stop() : 0;
+    // If the <audio> never started playing (play() pending, no metadata yet) its currentTime is
+    // meaningless: resume from where the engine was.
+    const audioTimeSec = bg && handoff.started ? stoppedAt : currentMediaTimeRef.current;
+    const time = resumePosition({
+      audioTimeSec,
+      durationSec: mediaDurationRef.current || (bg ? bg.duration : 0),
+      ended
+    });
+    currentMediaTimeRef.current = time;
+    return { time, pausedExternally: handoff.pausedExternally };
+  }, []);
+
+  // Resume the engine at the handed-back position; a dead socket rebuilds the engine there.
+  const resumeEngineAfterHandoff = useCallback(
+    ({ time, pausedExternally }) => {
+      const eng = engineRef.current;
+      setDisplayTime(time);
+      if (pausedExternally) setIsPaused(true);
+      if (!eng || !eng.isConnected()) {
+        autoRebuildUsedRef.current = true; // this resume's rebuild; no second one on its close
+        resumeOverrideRef.current = { file: targetFileRef.current, time, paused: pausedExternally };
+        setReconnectKey((k) => k + 1);
+        return;
+      }
+      if (!pausedExternally) {
+        isPausedRef.current = false;
+        eng.setPaused(false);
+      }
+      seekTo(time); // also saves the position
+    },
+    [seekTo]
+  );
+
+  const handOffToBackground = useCallback(() => {
+    const eng = engineRef.current;
+    const bg = bgAudioRef.current;
+    if (!eng || !bg || handedOffRef.current) return;
+    if (
+      !shouldHandOff({
+        hidden: document.visibilityState === "hidden",
+        playing: !isPausedRef.current,
+        ended: isEndedRef.current,
+        unlocked: bg.isUnlocked,
+        supported: handoffNeededRef.current,
+        // Muted: nothing to hear. (Volume is followed only up to 1; iOS ignores element volume.)
+        muted: isMutedRef.current,
+        timeSec: currentMediaTimeRef.current,
+        durationSec: mediaDurationRef.current
+      })
+    ) {
+      return;
+    }
+    const handoff = { pausedExternally: false, started: false };
+    handedOffRef.current = handoff;
+    // play() must be called synchronously inside the visibilitychange handler.
+    const started = bg.start({
+      timeSec: currentMediaTimeRef.current,
+      rate: playbackSpeedRef.current,
+      volume: curVolRef.current, // clamped to 1 by the controller
+      muted: isMutedRef.current,
+      loop: loopEnabledRef.current
+    });
+    // Engine pause stops its scheduled audio; isPausedRef only, the UI keeps showing "playing".
+    isPausedRef.current = true;
+    eng.setPaused(true);
+    started.then((ok) => {
+      if (handedOffRef.current !== handoff) return;
+      if (ok) {
+        handoff.started = true;
+        return;
+      }
+      // NotAllowedError / unsupported / error: fall back to the engine (no retry until next hide).
+      handedOffRef.current = null;
+      const e = engineRef.current;
+      if (e && !isEndedRef.current) {
+        isPausedRef.current = false;
+        e.setPaused(false);
+      }
+    });
+  }, []);
+
+  // Rebuild the engine at the current position (dead socket), keeping the paused state.
+  const rebuildEngineHere = useCallback(() => {
+    resumeOverrideRef.current = {
+      file: targetFileRef.current,
+      time: currentMediaTimeRef.current,
+      paused: isPausedRef.current
+    };
+    setReconnectKey((k) => k + 1);
+  }, []);
+
+  const returnFromBackground = useCallback(() => {
+    pendingHandoffRef.current = null;
+    const result = endBackgroundHandoff();
+    if (result) resumeEngineAfterHandoff(result);
+  }, [endBackgroundHandoff, resumeEngineAfterHandoff]);
+
+  // Page visible again: open the auto-rebuild window, and rebuild now if the socket died while
+  // hidden (and returnFromBackground didn't already rebuild).
+  const markResumed = useCallback(() => {
+    const now = Date.now();
+    // visibilitychange and pageshow can both report one return: count it once.
+    if (now - resumedAtRef.current < 1000) return;
+    resumedAtRef.current = now;
+    if (resumeOverrideRef.current) {
+      autoRebuildUsedRef.current = true;
+      diedWhileHiddenRef.current = false;
+      return;
+    }
+    autoRebuildUsedRef.current = false;
+    if (diedWhileHiddenRef.current && engineRef.current && !isEndedRef.current) {
+      diedWhileHiddenRef.current = false;
+      autoRebuildUsedRef.current = true;
+      rebuildEngineHere();
+    }
+  }, [rebuildEngineHere]);
+
+  // <audio> events while handed off.
+  const handleBgTime = useCallback((sec) => {
+    if (!handedOffRef.current) return;
+    currentMediaTimeRef.current = sec;
+    setDisplayTime(sec);
+    const wholeSec = Math.floor(sec);
+    if (wholeSec > 0 && videoIdRef.current && onTimeUpdateRef.current) {
+      lastReportedSecondRef.current = wholeSec;
+      onTimeUpdateRef.current(videoIdRef.current, sec, mediaDurationRef.current, { force: false });
+    }
+  }, []);
+
+  // Lock screen / Control Center pause: a real user pause, so mirror it into the player.
+  const handleBgPausedExternally = useCallback(
+    (sec) => {
+      const handoff = handedOffRef.current;
+      if (!handoff) return;
+      handoff.pausedExternally = true;
+      currentMediaTimeRef.current = sec;
+      setDisplayTime(sec);
+      setIsPaused(true);
+      reportExactPosition();
+    },
+    [reportExactPosition]
+  );
+
+  const handleBgPlayExternally = useCallback(() => {
+    const handoff = handedOffRef.current;
+    if (!handoff) return;
+    handoff.pausedExternally = false;
+    setIsPaused(false);
+  }, []);
+
+  // Same path as the engine running out of media (ended UI, completed progress, onEnded).
+  // If onEnded autoplays the next file while still hidden, pendingHandoffRef makes the
+  // background <audio> effect hand that file off too.
+  const handleBgEnded = useCallback(() => {
+    if (!endBackgroundHandoff(true)) return;
+    pendingHandoffRef.current =
+      document.visibilityState === "hidden" ? { fromFile: targetFileRef.current } : null;
+    playbackEndedRef.current?.();
+  }, [endBackgroundHandoff]);
+
+  // Playback error in the background: hand back to the engine like on return.
+  const handleBgError = useCallback(() => {
+    returnFromBackground();
+  }, [returnFromBackground]);
 
   // Engine lifecycle: one WebSocket + decoder + AudioContext per file / visibility.
   useEffect(() => {
@@ -491,12 +718,20 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     canvas.className = "yt-drive-canvas";
     host.appendChild(canvas);
 
+    // A rebuild after a background handoff (dead socket) starts where the <audio> stopped.
+    const override =
+      resumeOverrideRef.current && resumeOverrideRef.current.file === targetFile
+        ? resumeOverrideRef.current
+        : null;
+    resumeOverrideRef.current = null;
     // getStartTime (from VideoPlayer) gives the exact position the other player left off at.
-    const requestedStart = getStartTime?.() ?? initialSavedTimeRef.current;
+    const requestedStart = override ? override.time : getStartTime?.() ?? initialSavedTimeRef.current;
     const startSeek = Number(requestedStart) > 0 ? Number(requestedStart) : 0;
+    let startPaused = Boolean(override && override.paused); // paused from the lock screen
 
     isPausedRef.current = false;
     isEndedRef.current = false;
+    diedWhileHiddenRef.current = false;
     seekBaseTimeRef.current = startSeek;
     currentMediaTimeRef.current = startSeek;
     mediaDurationRef.current = 0;
@@ -507,9 +742,10 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     autoFpsLadderRef.current = null;
     requestedFpsRef.current = fpsRequestFor(fpsSettingRef.current, null, null);
 
-    setIsPaused(false);
+    if (startPaused) isPausedRef.current = true; // engine.setPaused(true) once "meta" arrives
+    setIsPaused(startPaused);
     setIsEnded(false);
-    setIsBuffering(true);
+    setIsBuffering(!startPaused);
     setBufferedAheadSec(0);
     setBufferedPct(0);
     setDisplayTime(startSeek);
@@ -556,6 +792,34 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
       if (!isDraggingSeekRef.current) setDisplayTime(sk);
     };
 
+    // Engine ran out of media (also reused when the background <audio> ends).
+    const handlePlaybackEnded = () => {
+      if (cancelled) return;
+      if (loopEnabledRef.current) {
+        restartFromEndRef.current?.();
+        return;
+      }
+      isEndedRef.current = true;
+      isPausedRef.current = true;
+      engine.setPaused(true);
+      setIsBuffering(false);
+      if (mediaDurationRef.current > 0) {
+        currentMediaTimeRef.current = mediaDurationRef.current;
+        setDisplayTime(mediaDurationRef.current);
+      }
+      setIsEnded(true);
+      setIsPaused(true);
+      if (videoIdRef.current && onTimeUpdateRef.current) {
+        onTimeUpdateRef.current(
+          videoIdRef.current,
+          mediaDurationRef.current,
+          mediaDurationRef.current,
+          { force: true, completed: true }
+        );
+      }
+      if (onEndedRef.current) onEndedRef.current();
+    };
+
     const engine = new WebCodecsEngine({
       url: wsUrl,
       canvas,
@@ -566,6 +830,16 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
             applyStreamInfo(msg);
             loopEnabledRef.current = Boolean(msg.loop);
             setLoopEnabled(Boolean(msg.loop));
+            if (startPaused) {
+              startPaused = false;
+              // Only if still paused: a tap before meta already resumed the engine and the UI.
+              if (isPausedRef.current) {
+                // Socket is open now, so the server pauses ffmpeg too (re-sent if a pause before
+                // open made setPaused a no-op).
+                if (engine.paused) engine.send({ type: "pause" });
+                else engine.setPaused(true);
+              }
+            }
           } else if (msg.type === "reset") {
             applyStreamInfo(msg);
           } else if (msg.type === "ended") {
@@ -599,45 +873,35 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         onBuffering: (b) => {
           if (!cancelled) setIsBuffering(b);
         },
-        onPlaybackEnded: () => {
-          if (cancelled) return;
-          if (loopEnabledRef.current) {
-            restartFromEndRef.current?.();
-            return;
-          }
-          isEndedRef.current = true;
-          isPausedRef.current = true;
-          engine.setPaused(true);
-          setIsBuffering(false);
-          if (mediaDurationRef.current > 0) {
-            currentMediaTimeRef.current = mediaDurationRef.current;
-            setDisplayTime(mediaDurationRef.current);
-          }
-          setIsEnded(true);
-          setIsPaused(true);
-          if (videoIdRef.current && onTimeUpdateRef.current) {
-            onTimeUpdateRef.current(
-              videoIdRef.current,
-              mediaDurationRef.current,
-              mediaDurationRef.current,
-              { force: true, completed: true }
-            );
-          }
-          if (onEndedRef.current) onEndedRef.current();
-        },
+        onPlaybackEnded: handlePlaybackEnded,
         onStatus: (text) => {
           if (!cancelled) setStatusText(text);
         },
         onError: (text) => {
           if (!cancelled) setStatusText(`Error: ${text}`);
+        },
+        // Socket closed under us. A handoff in progress is recovered by returnFromBackground
+        // (isConnected() false). One auto-rebuild per resume, so a dead server can't loop.
+        onDisconnected: () => {
+          if (cancelled || isEndedRef.current || handedOffRef.current) return;
+          if (document.visibilityState === "hidden") {
+            diedWhileHiddenRef.current = true; // markResumed rebuilds on return
+            return;
+          }
+          const sinceResume = Date.now() - resumedAtRef.current;
+          if (resumedAtRef.current <= 0 || sinceResume > AUTO_REBUILD_WINDOW_MS) return;
+          if (autoRebuildUsedRef.current) return;
+          autoRebuildUsedRef.current = true;
+          rebuildEngineHere();
         }
       }
     });
+    playbackEndedRef.current = handlePlaybackEnded;
     engine.setVolume(isMutedRef.current ? 0 : curVolRef.current, isMutedRef.current);
     engine.setSyncOffset(syncOffsetRef.current);
     engine.setRebufferTarget(bufferTargetRef.current);
     engineRef.current = engine;
-    tryUnlockAudio();
+    engine.unlockAudio(); // not tryUnlockAudio: no gesture here, so leave the background <audio> alone
 
     const statsTimer = setInterval(() => {
       if (cancelled) return;
@@ -699,13 +963,87 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     return () => {
       cancelled = true;
       clearInterval(statsTimer);
+      // File change / player hidden / unmount (incl. switch to Standard) while handed off: stop
+      // the <audio>; its position lands in currentMediaTimeRef and is saved just below.
+      endBackgroundHandoff();
       reportExactPosition();
       engine.destroy();
       if (engineRef.current === engine) engineRef.current = null;
+      if (playbackEndedRef.current === handlePlaybackEnded) playbackEndedRef.current = null;
       if (host) host.innerHTML = "";
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetFile, isHidden, supported, reconnectKey]);
+
+  // Background <audio>: created once, pointed at the current file (same URL as Plyr's video.src).
+  useEffect(() => {
+    if (!supported || isHidden || !targetFile || !handoffNeededRef.current) return;
+    if (!BackgroundAudio.isSupported()) return;
+    if (!bgAudioRef.current) {
+      bgAudioRef.current = new BackgroundAudio({
+        onTime: handleBgTime,
+        onEnded: handleBgEnded,
+        onPausedExternally: handleBgPausedExternally,
+        onPlayExternally: handleBgPlayExternally,
+        onError: handleBgError
+      });
+    }
+    bgAudioRef.current.setSource(targetFile);
+    // Background <audio> ended while hidden and onEnded moved on: continue with this file in the
+    // background from the new engine's start position (set by the engine effect, which runs
+    // first). On rejection handOffToBackground falls back to the engine silently.
+    const pending = pendingHandoffRef.current;
+    if (pending && pending.fromFile !== targetFile) {
+      pendingHandoffRef.current = null;
+      if (document.visibilityState === "hidden") handOffToBackground();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetFile, isHidden, supported]);
+
+  useEffect(
+    () => () => {
+      endBackgroundHandoff();
+      if (bgAudioRef.current) {
+        bgAudioRef.current.destroy();
+        bgAudioRef.current = null;
+      }
+    },
+    [endBackgroundHandoff]
+  );
+
+  // Page visibility drives the handoff (iOS: app switch / lock; desktop: tab hide).
+  useEffect(() => {
+    if (!supported) return undefined;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        handOffToBackground();
+      } else {
+        returnFromBackground();
+        markResumed();
+      }
+    };
+    const onPageShow = () => {
+      if (document.visibilityState === "visible") {
+        returnFromBackground();
+        markResumed();
+      }
+    };
+    // The page may be frozen or discarded after this: save the exact position now.
+    const onPageHide = () => {
+      if (handedOffRef.current && handedOffRef.current.started && bgAudioRef.current) {
+        currentMediaTimeRef.current = bgAudioRef.current.currentTime;
+      }
+      if (handedOffRef.current || engineRef.current) reportExactPosition();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onPageShow);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [supported, handOffToBackground, returnFromBackground, markResumed, reportExactPosition]);
 
   // Seek bar scrubbing
   const getRatioFromClientX = useCallback((clientX) => {

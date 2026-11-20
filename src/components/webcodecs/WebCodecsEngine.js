@@ -165,7 +165,10 @@ export class WebCodecsEngine {
       this.handleBinary(ev.data);
     };
     ws.onclose = () => {
-      if (!this.destroyed) this.cb.onStatus?.("Disconnected");
+      if (this.destroyed) return;
+      this.cb.onStatus?.("Disconnected");
+      // The player may rebuild the engine (e.g. a socket iOS killed in the background).
+      this.cb.onDisconnected?.();
     };
     ws.onerror = () => {
       if (!this.destroyed) this.cb.onStatus?.("Connection error");
@@ -795,6 +798,17 @@ export class WebCodecsEngine {
 
   isAudioLocked() {
     return Boolean(this.hasAudio && this.audioCtx && this.audioCtx.state !== "running");
+  }
+
+  // False once the socket closed (iOS may kill it during a long background) or the engine is gone;
+  // the player then rebuilds the engine instead of seeking (background handoff, WebCodecsPlayer.jsx).
+  isConnected() {
+    return Boolean(
+      !this.destroyed &&
+        this.ws &&
+        this.ws.readyState === 1 &&
+        (!this.audioCtx || this.audioCtx.state !== "closed")
+    );
   }
 
   unlockAudio() {
