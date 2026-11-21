@@ -1,7 +1,13 @@
-/* Subpages: Watch History & Favorites */
+/* Subpages: Watch History, Favorites, Upload & YouTube */
 .container.subpage-mode {
     display: block;
     max-width: 1380px;
+}
+
+.container.subpage-mode .player-section:not(.floating-player) {
+    position: static;
+    width: 100%;
+    margin-bottom: 2rem;
 }
 
 .subpage-container {

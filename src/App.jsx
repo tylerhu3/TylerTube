@@ -6,6 +6,8 @@ import VideoGrid from "./components/VideoGrid";
 import HistoryPage from "./components/HistoryPage";
 import FavoritesPage from "./components/FavoritesPage";
 import UploadPage from "./components/UploadPage";
+import YouTubePage from "./components/YouTubePage";
+import ShortsPage from "./components/ShortsPage";
 import { VIDEO_LIBRARY } from "./data/videos";
 import { COLOR_THEMES } from "./data/themeColors";
 import { readJSON, readString, writeString, writeJSON } from "./lib/storage";
@@ -137,6 +139,7 @@ export default function App() {
   const [currentVideoId, setCurrentVideoId] = useState(() =>
     getInitialVideoId(watchProgress)
   );
+  const [activeCustomVideo, setActiveCustomVideo] = useState(null);
   const [currentPage, setCurrentPage] = useState("home");
   const [uploadPageOpened, setUploadPageOpened] = useState(false);
   if (currentPage === "upload" && !uploadPageOpened) setUploadPageOpened(true);
@@ -287,10 +290,13 @@ export default function App() {
   }, [historyItems]);
 
   const currentVideo = useMemo(() => {
+    if (activeCustomVideo && activeCustomVideo.id === currentVideoId) {
+      return activeCustomVideo;
+    }
     return (
-      VIDEO_LIBRARY.find((v) => v.id === currentVideoId) || VIDEO_LIBRARY[0]
+      VIDEO_LIBRARY.find((v) => v.id === currentVideoId) || activeCustomVideo || VIDEO_LIBRARY[0]
     );
-  }, [currentVideoId]);
+  }, [currentVideoId, activeCustomVideo]);
 
   useEffect(() => {
     if (!currentVideo?.id) return;
@@ -331,6 +337,16 @@ export default function App() {
       }
     },
     [currentPage, isSidePlayer, isTheaterMode, viewMode]
+  );
+
+  const handleSelectYouTubeVideo = useCallback(
+    (video) => {
+      setActiveCustomVideo(video);
+      setCurrentVideoId(video.id);
+      setPlayerMode("webcodecs");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    []
   );
 
   const updateSidePlayerPrefs = useCallback((updater) => {
@@ -620,7 +636,10 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [toggleTheaterMode, toggleSidePlayer, toggleViewMode, togglePlayerMode, currentPage, viewMode]);
 
-  const isPlayerHidden = currentPage !== "home" && !isSidePlayer;
+  const isPlayerHidden =
+    currentPage !== "home" &&
+    !isSidePlayer &&
+    !( (currentPage === "youtube" || currentPage === "shorts") && activeCustomVideo );
 
   return (
     <div className={`app-shell view-mode-${viewMode}`}>
@@ -692,6 +711,7 @@ export default function App() {
           playerMode={playerMode}
           onTogglePlayerMode={togglePlayerMode}
           onToggleTheater={toggleTheaterMode}
+          onClose={activeCustomVideo ? () => setActiveCustomVideo(null) : undefined}
         />
 
         {currentPage === "home" && (
@@ -738,6 +758,24 @@ export default function App() {
             onToggleFavorite={handleToggleFavorite}
             onClearFavorites={handleClearFavorites}
             onNavigateHome={() => setCurrentPage("home")}
+          />
+        )}
+
+        {currentPage === "youtube" && (
+          <YouTubePage
+            onSelectYouTubeVideo={handleSelectYouTubeVideo}
+            currentVideoId={currentVideo?.id}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
+          />
+        )}
+
+        {currentPage === "shorts" && (
+          <ShortsPage
+            onSelectShort={handleSelectYouTubeVideo}
+            currentVideoId={currentVideo?.id}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
           />
         )}
 
@@ -799,6 +837,34 @@ export default function App() {
               )}
             </span>
             <span className="mobile-nav-label">Favorites</span>
+          </button>
+
+          <button
+            type="button"
+            className={`mobile-nav-item ${currentPage === "youtube" ? "active" : ""}`}
+            onClick={() => setCurrentPage("youtube")}
+          >
+            <span className="mobile-nav-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "youtube" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z" />
+                <polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02" fill="currentColor" />
+              </svg>
+            </span>
+            <span className="mobile-nav-label">YouTube</span>
+          </button>
+
+          <button
+            type="button"
+            className={`mobile-nav-item ${currentPage === "shorts" ? "active" : ""}`}
+            onClick={() => setCurrentPage("shorts")}
+          >
+            <span className="mobile-nav-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "shorts" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="5" y="2" width="14" height="20" rx="3" />
+                <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" />
+              </svg>
+            </span>
+            <span className="mobile-nav-label">Shorts</span>
           </button>
 
           <button

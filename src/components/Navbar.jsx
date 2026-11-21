@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { COLOR_THEMES } from "../data/themeColors";
 
-const PAGE_LABELS = { history: "History", favorites: "Favorites", upload: "Upload" };
+const PAGE_LABELS = { history: "History", favorites: "Favorites", upload: "Upload", youtube: "YouTube", shorts: "Shorts" };
 
 export default function Navbar({
   searchQuery,

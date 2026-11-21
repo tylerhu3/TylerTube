@@ -92,7 +92,8 @@ export default function VideoPlayer({
   viewMode = "desktop",
   playerMode = "standard",
   onTogglePlayerMode,
-  onToggleTheater
+  onToggleTheater,
+  onClose
 }) {
   // WebCodecs mode hides Plyr and shows the canvas player (exposes seekTo/skipBy).
   const isWebCodecsMode = playerMode === "webcodecs";
@@ -384,6 +385,12 @@ export default function VideoPlayer({
       }
 
       if (cancelled) return;
+
+      if (video.src && video.src.startsWith("yt:")) {
+        // YouTube videos stream exclusively through the WebCodecs engine
+        loadedVideoIdRef.current = video.id;
+        return;
+      }
 
       player.source = {
         type: "video",
@@ -913,6 +920,17 @@ export default function VideoPlayer({
             >
               ⤢ Expand
             </button>
+            {onClose && (
+              <button
+                type="button"
+                className="floating-close-btn"
+                onClick={onClose}
+                title="Close Player"
+                aria-label="Close Player"
+              >
+                ✕
+              </button>
+            )}
           </div>
         </>
       )}
@@ -1068,6 +1086,16 @@ export default function VideoPlayer({
           >
             {isSidePlayer ? "⤢ Restore" : "⧉ Push to Side"}
           </button>
+          {onClose && (
+            <button
+              type="button"
+              className="ctrl-btn"
+              onClick={onClose}
+              title="Close player"
+            >
+              ✕ Close
+            </button>
+          )}
         </div>
       </div>
     </section>

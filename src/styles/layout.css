@@ -31,7 +31,8 @@
     padding-top: 0;
 }
 
-.container.theater-mode .player-section:not(.floating-player) {
+.container.theater-mode .player-section:not(.floating-player),
+.container.subpage-mode .player-section:not(.floating-player) {
     position: static;
     width: 100%;
 }

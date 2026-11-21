@@ -37,6 +37,12 @@ Internet ─► Netlify (redirect-site/, 302) ─► *.trycloudflare.com quick t
     overwritten), `upload-rules.js` (pure, tested). Client: `src/lib/uploader.js` (8 MB chunks,
     retries, resume), `UploadPage.jsx` + `components/upload/`. `http-utils.js` holds
     `readBody`/`sendJSON`/`clientIp` for all JSON routes.
+  - YouTube streaming: `youtube.js` (`/api/youtube/search`, `/api/youtube/info`), powered by
+    `yt-dlp` (prioritizing `/opt/homebrew/bin/yt-dlp`). For playback, `drive-ws.js` accepts `file=yt:<id>`
+    or any YouTube URL, spawns `yt-dlp` (`spawnYouTubeStream`) outputting merged MKV to stdout, and pipes
+    into ffmpeg's stdin (`pipe:0`). ffmpeg transcodes in real-time to H.264 Baseline Annex-B + PCM mono
+    over `/ws/mpeg1`. Seeking passes `--download-sections "*${seek}-inf"` to `yt-dlp`. Both `yt-dlp` and
+    ffmpeg receive `SIGSTOP`/`SIGCONT` on pause/resume and `SIGKILL` on teardown.
   - `media-files.js` (`resolveLocalVideoFile`, path-traversal guard, ffprobe helpers), `shared.js`,
     `build-info.js` (version `define`s).
 - **Player modes** (`playerMode` in `App.jsx`, toggled by D / the player buttons):
@@ -48,23 +54,29 @@ Internet ─► Netlify (redirect-site/, 302) ─► *.trycloudflare.com quick t
   - Both save to the same watch-progress store (`tylertube_watch_progress`). `VideoPlayer.jsx`
     keeps `positionRef` (exact last position) and hands it across a mode switch; a hidden Plyr
     doesn't report progress while WebCodecs is active.
+  - YouTube playback streams exclusively via `"webcodecs"` on canvas (`targetFile.startsWith("yt:")`).
+    Plyr is bypassed so the DOM `<video>` doesn't attempt to load raw `yt:` strings, and background
+    `<audio>` handoff is skipped.
 - **State:** all app state is in `src/App.jsx` (no router, no store). Pages are switched by
-  `currentPage` = `"home" | "history" | "favorites" | "upload"` (Upload stays mounted, hidden,
-  once opened so a queue keeps running while you browse). Persistence is `localStorage`, mirrored to
-  `/api/state` by `src/lib/sync.js` (`syncStore` in `App.jsx`; `main.jsx` awaits
-  `initialSync()` before render). Last-write-wins on `modifiedAt` per video / per field.
+  `currentPage` = `"home" | "history" | "favorites" | "upload" | "youtube" | "shorts"` (Upload stays mounted, hidden,
+  once opened so a queue keeps running while you browse; YouTube/Shorts active video is tracked in `activeCustomVideo`).
+  Persistence is `localStorage`, mirrored to `/api/state` by `src/lib/sync.js` (`syncStore` in `App.jsx`;
+  `main.jsx` awaits `initialSync()` before render). Last-write-wins on `modifiedAt` per video / per field.
 
 ## Directory guide
 
 | Path | What |
 |---|---|
-| `server/` | Backend (see Architecture). Unit-tested in `tests/server.test.js`, `tests/standalone.test.js`, `tests/webcodecs.test.js` |
+| `server/` | Backend (see Architecture). Unit-tested in `tests/server.test.js`, `tests/standalone.test.js`, `tests/webcodecs.test.js`, `tests/youtube.test.js` |
+| `server/youtube.js` | YouTube metadata resolution, search, shorts search, and streaming pipeline via `yt-dlp` |
 | `src/App.jsx` | All state, localStorage keys, keyboard shortcuts, page switch, mobile bottom nav |
 | `src/lib/storage.js` | Never-throwing localStorage helpers (`readJSON`, `writeJSON`, `writeString`, …) |
 | `src/lib/sync.js`, `syncMerge.js` | Server sync of localStorage (see State) and the shared merge rules |
 | `src/utils/format.js` | Shared formatting (`formatDuration`) |
 | `src/components/VideoPlayer.jsx` | Plyr player, standard/webcodecs switch, position handoff |
 | `src/components/WebCodecsPlayer.jsx` | WebCodecs player component: state/refs, engine lifecycle, controls |
+| `src/components/YouTubePage.jsx` | YouTube portal: search, URL direct streaming, quick topic chips |
+| `src/components/ShortsPage.jsx` | YouTube Shorts portal: vertical 9:16 short-form cards, search, direct short streaming |
 | `src/components/webcodecs/` | `WebCodecsEngine.js` (socket, decoder, audio, clock), `protocol.js`, `scheduler.js` (pure, tested), `PlayerChrome.jsx`, `SettingsMenu.jsx`, `playerUtils.js` |
 | `src/components/{Navbar,SideMenu,VideoGrid}.jsx` | Top bar, hamburger drawer (nav, color themes, Desktop/Mobile layout), library grid |
 | `src/components/{History,Favorites}Page.jsx` | Subpages (similar layout, different logic) |
@@ -82,7 +94,7 @@ Internet ─► Netlify (redirect-site/, 302) ─► *.trycloudflare.com quick t
 | `public/videos/`, `public/thumbnails/` | Media, ~51 GB, gitignored. **Never read or list recursively.** |
 
 CSS map: `theme` (vars, accent themes) · `navbar` · `layout` · `player` (standard + floating) ·
-`library` · `side-menu` · `subpages` · `mobile` · `webcodecs-player` (`.yt-*`) · `theme-picker`.
+`library` · `side-menu` · `subpages` · `mobile` · `webcodecs-player` (`.yt-*`) · `theme-picker` · `youtube`.
 Use `grep -n "^/\* " src/styles/<file>.css` to find sections.
 
 ## Commands
@@ -147,6 +159,12 @@ Requires `ffmpeg` (with libx264)/`ffprobe` on PATH.
   a synced field (favorites, last video, theme, color theme) needs `syncStore.touch(name)` on a
   *user* change only (stamping on mount would override other devices). Removals are written, not
   deleted (the server never deletes by omission).
+- **Subpage inline player scrolling:** On subpages (`.container.subpage-mode`), `.player-section:not(.floating-player)`
+  must stay `position: static` (set in `subpages.css`, `layout.css`, and `mobile.css`). If set to `position: sticky`,
+  the inline player stays stuck to `top: 76px` / `53px` and hovers over scrolling subpage content (e.g. YouTube cards).
+  The floating PiP mini-player (`isSidePlayer` / `.floating-player`) uses `position: fixed`.
+- **yt-dlp priority:** `server/youtube.js` checks Homebrew's `/opt/homebrew/bin/yt-dlp` before user home (`~/.local/bin/yt-dlp`)
+  to ensure the latest binary with current YouTube SABR cipher support is invoked.
 - Theme migration flag `tylertube_theme_migrated_v2` in `App.jsx`: don't remove casually.
 - Nginx serves from the symlink `/Users/Shared/MyStreamingApp` → this repo.
 - `scripts/check.mjs` relies on `@babel/parser`/`@babel/traverse`, installed transitively by

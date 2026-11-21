@@ -140,6 +140,34 @@ export default function SideMenu({
 
             <button
               type="button"
+              className={`side-menu-item ${currentPage === "youtube" ? "active" : ""}`}
+              onClick={() => handleSelectPage("youtube")}
+            >
+              <span className="side-menu-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "youtube" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z" />
+                  <polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02" fill="currentColor" />
+                </svg>
+              </span>
+              <span className="side-menu-label">YouTube</span>
+            </button>
+
+            <button
+              type="button"
+              className={`side-menu-item ${currentPage === "shorts" ? "active" : ""}`}
+              onClick={() => handleSelectPage("shorts")}
+            >
+              <span className="side-menu-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "shorts" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="5" y="2" width="14" height="20" rx="3" />
+                  <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" />
+                </svg>
+              </span>
+              <span className="side-menu-label">Shorts</span>
+            </button>
+
+            <button
+              type="button"
               className={`side-menu-item ${currentPage === "upload" ? "active" : ""}`}
               onClick={() => handleSelectPage("upload")}
             >

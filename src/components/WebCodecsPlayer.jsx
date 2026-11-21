@@ -977,7 +977,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
 
   // Background <audio>: created once, pointed at the current file (same URL as Plyr's video.src).
   useEffect(() => {
-    if (!supported || isHidden || !targetFile || !handoffNeededRef.current) return;
+    if (!supported || isHidden || !targetFile || !handoffNeededRef.current || targetFile.startsWith("yt:")) return;
     if (!BackgroundAudio.isSupported()) return;
     if (!bgAudioRef.current) {
       bgAudioRef.current = new BackgroundAudio({

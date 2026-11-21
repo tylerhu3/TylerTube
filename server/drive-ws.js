@@ -12,6 +12,12 @@ import {
   probeVideoFrameRate
 } from "./media-files.js";
 import {
+  extractYouTubeVideoId,
+  fetchYouTubeInfo,
+  isYouTubeTarget,
+  spawnYouTubeStream
+} from "./youtube.js";
+import {
   AnnexBSplitter,
   PcmCoalescer,
   WC_MAX_AHEAD_SEC,
@@ -47,7 +53,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     });
   });
 
-  wss.on("connection", (ws, req) => {
+  wss.on("connection", async (ws, req) => {
     const [, rawQuery = ""] = (req.url || "").split("?");
     const params = new URLSearchParams(rawQuery);
     const rawTarget =
@@ -76,30 +82,51 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     let loopEnabled = Boolean(initialLoop);
     let isPaused = false;
     let activeFfmpeg = null;
+    let activeYtDlp = null;
     let pauseHoldTimer = null;
     let drainInterval = null;
     let wsClosed = false;
 
-    const localFile = resolveLocalVideoFile(rawTarget, videosDir);
-    if (!localFile) {
+    const isYouTube = isYouTubeTarget(rawTarget);
+    const youtubeId = isYouTube ? extractYouTubeVideoId(rawTarget) : null;
+    let localFile = null;
+    let duration = 0;
+    let hasAudio = true;
+    let sourceFps = 30;
+
+    if (isYouTube) {
       try {
-        ws.send(
-          JSON.stringify({ type: "error", message: "Video file not found" })
-        );
-        ws.close();
+        const info = await fetchYouTubeInfo(youtubeId);
+        if (wsClosed) return;
+        duration = info.duration || 0;
       } catch {
-        // Ignore
+        if (wsClosed) return;
+        // Proceed with duration = 0 if probe failed
       }
-      return;
+    } else {
+      localFile = resolveLocalVideoFile(rawTarget, videosDir);
+      if (!localFile) {
+        try {
+          ws.send(
+            JSON.stringify({ type: "error", message: "Video file not found" })
+          );
+          ws.close();
+        } catch {
+          // Ignore
+        }
+        return;
+      }
+
+      duration = probeVideoDuration(localFile);
+      hasAudio = probeHasAudioStream(localFile);
+      const probedRate = probeVideoFrameRate(localFile);
+      sourceFps = pickSourceFps(probedRate.avg, probedRate.r);
     }
 
-    const duration = probeVideoDuration(localFile);
     if (duration > 0 && currentSeek >= duration - 0.5) {
       currentSeek = 0;
     }
-    const hasAudio = probeHasAudioStream(localFile);
-    const probedRate = probeVideoFrameRate(localFile);
-    const sourceFps = pickSourceFps(probedRate.avg, probedRate.r);
+    const streamSource = isYouTube ? `yt:${youtubeId}` : localFile;
     const outputFps = () =>
       resolveOutputFps({ requested: requestedFps, sourceFps, speed: currentSpeed });
     // Stream info sent with every meta/reset. fps = output rate of this stream (frame n is at
@@ -135,6 +162,21 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
       if (pauseHoldTimer) {
         clearTimeout(pauseHoldTimer);
         pauseHoldTimer = null;
+      }
+      if (activeYtDlp) {
+        const ytdl = activeYtDlp;
+        activeYtDlp = null;
+        try {
+          ytdl.stdout?.removeAllListeners();
+          ytdl.stdout?.destroy();
+        } catch {
+          // Ignore
+        }
+        try {
+          ytdl.kill("SIGKILL");
+        } catch {
+          // Ignore
+        }
       }
       if (activeFfmpeg) {
         const proc = activeFfmpeg;
@@ -197,19 +239,43 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
       }
 
       try {
-        const args = buildWebCodecsFfmpegArgs({
-          input: streamUrl,
-          seek: currentSeek,
-          speed: spd,
-          quality: currentQuality,
-          fps,
-          hasAudio
-        });
-        const ffmpeg = spawn("ffmpeg", args, {
-          stdio: hasAudio
-            ? ["ignore", "pipe", "pipe", "pipe"]
-            : ["ignore", "pipe", "pipe"]
-        });
+        let ffmpeg;
+        if (isYouTube) {
+          activeYtDlp = spawnYouTubeStream({
+            videoId: youtubeId,
+            seek: currentSeek,
+            quality: currentQuality
+          });
+          const args = buildWebCodecsFfmpegArgs({
+            input: "pipe:0",
+            seek: 0,
+            speed: spd,
+            quality: currentQuality,
+            fps,
+            hasAudio: true
+          });
+          ffmpeg = spawn("ffmpeg", args, {
+            stdio: ["pipe", "pipe", "pipe", "pipe"]
+          });
+          activeYtDlp.stdout.pipe(ffmpeg.stdin);
+          activeYtDlp.on("error", (err) => {
+            sendJson({ type: "error", message: `YouTube stream error: ${err.message}` });
+          });
+        } else {
+          const args = buildWebCodecsFfmpegArgs({
+            input: streamUrl,
+            seek: currentSeek,
+            speed: spd,
+            quality: currentQuality,
+            fps,
+            hasAudio
+          });
+          ffmpeg = spawn("ffmpeg", args, {
+            stdio: hasAudio
+              ? ["ignore", "pipe", "pipe", "pipe"]
+              : ["ignore", "pipe", "pipe"]
+          });
+        }
         activeFfmpeg = ffmpeg;
 
         const audioPipe = hasAudio ? ffmpeg.stdio[3] : null;
@@ -361,7 +427,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
       }
     }
 
-    doStream(localFile, false);
+    doStream(streamSource, false);
 
     ws.on("message", (raw) => {
       if (wsClosed) return;
@@ -386,6 +452,13 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             // Ignore
           }
         }
+        if (activeYtDlp) {
+          try {
+            activeYtDlp.kill("SIGSTOP");
+          } catch {
+            // Ignore
+          }
+        }
       } else if (msg.type === "resume") {
         isPaused = false;
         if (pauseHoldTimer) {
@@ -398,11 +471,18 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
           } catch {
             // Ignore
           }
+          if (activeYtDlp) {
+            try {
+              activeYtDlp.kill("SIGCONT");
+            } catch {
+              // Ignore
+            }
+          }
         } else {
           if (duration > 0 && currentSeek >= duration - 0.5) {
             currentSeek = 0;
           }
-          doStream(localFile, true);
+          doStream(streamSource, true);
         }
       } else if (msg.type === "seek") {
         let target = parseFloat(msg.time);
@@ -413,7 +493,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
           target = Math.max(0, target);
         }
         currentSeek = target;
-        doStream(localFile, true);
+        doStream(streamSource, true);
       } else if (msg.type === "speed") {
         const spd = parseFloat(msg.speed);
         if (!Number.isFinite(spd)) return;
@@ -424,7 +504,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
               ? Math.max(0, Math.min(duration - 0.1, parseFloat(msg.currentTime)))
               : Math.max(0, parseFloat(msg.currentTime));
         }
-        doStream(localFile, true);
+        doStream(streamSource, true);
       } else if (msg.type === "quality") {
         const q = parseInt(msg.quality, 10);
         if (!qualMap[q]) return;
@@ -435,7 +515,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
               ? Math.max(0, Math.min(duration - 0.1, parseFloat(msg.currentTime)))
               : Math.max(0, parseFloat(msg.currentTime));
         }
-        doStream(localFile, true);
+        doStream(streamSource, true);
       } else if (msg.type === "fps") {
         // "source" | number; restarts encoding at currentTime like "quality".
         if (msg.fps !== "source" && !Number.isFinite(Number(msg.fps))) return;
@@ -446,7 +526,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
               ? Math.max(0, Math.min(duration - 0.1, parseFloat(msg.currentTime)))
               : Math.max(0, parseFloat(msg.currentTime));
         }
-        doStream(localFile, true);
+        doStream(streamSource, true);
       } else if (msg.type === "loop") {
         loopEnabled = Boolean(msg.loop);
       }

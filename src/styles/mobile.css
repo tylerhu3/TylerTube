@@ -142,6 +142,11 @@
     padding: 0.85rem 0.85rem calc(76px + env(safe-area-inset-bottom, 0px));
 }
 
+[data-view-mode="mobile"] .container.subpage-mode .player-section:not(.floating-player) {
+    position: static;
+    margin-bottom: 1rem;
+}
+
 [data-view-mode="mobile"] .player-section:not(.floating-player) {
     position: sticky;
     top: 53px;

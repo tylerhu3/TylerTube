@@ -4,7 +4,8 @@ A self-hosted video streaming web application built with **React**, **Vite**, **
 
 ## Features
 
-- **React Component Architecture:** Modular `<Navbar />`, `<SideMenu />`, `<VideoPlayer />`, `<WebCodecsPlayer />`, `<VideoGrid />`, `<HistoryPage />` and `<FavoritesPage />` components with automatic watch-progress persistence, course/section folder filters, and visual progress bars on video cards.
+- **React Component Architecture:** Modular `<Navbar />`, `<SideMenu />`, `<VideoPlayer />`, `<WebCodecsPlayer />`, `<VideoGrid />`, `<HistoryPage />`, `<FavoritesPage />`, `<YouTubePage />`, and `<ShortsPage />` components with automatic watch-progress persistence, course/section folder filters, and visual progress bars on video cards.
+- **YouTube & YouTube Shorts WebCodecs Streaming Portals:** Dedicated in-app portals to search YouTube videos and YouTube Shorts (vertical 9:16 cards) or paste any video/shorts URL (`youtube.com/watch?v=...`, `youtube.com/shorts/...`, `youtu.be/...`). Backed by `server/youtube.js` (`yt-dlp`), streams are piped directly into `ffmpeg` and packetized over WebSocket into TylerTube's canvas WebCodecs engine (`VideoDecoder` + `AudioContext`), bypassing Tesla browser driving pause restrictions.
 - **Automatic Subdirectory, Subtitle & Thumbnail Discovery:** Custom Vite plugin (`videoCatalogPlugin` in `server/plugin.js`) recursively scans `public/videos/` (and any nested course/section folders), naturally sorts numbered lessons, URL-encodes special characters (`#`, `&`, spaces), automatically pairs matching `.srt`/`.vtt` subtitle files, and generates/serves `.jpg` video thumbnails in `public/thumbnails/` via `ffmpeg`.
 - **Safe Plyr.io React Integration:** Imperative `<video>` mounting via React `useRef` so Plyr's DOM wrapper never conflicts with React re-renders.
 - **Zero-Copy Video Build Pipeline:** Vite builds the React UI into `dist/` (`copyPublicDir: false`) while Nginx serves `/videos/` directly from `public/videos/`, avoiding duplicating multi-gigabyte video files during builds.
@@ -25,6 +26,7 @@ TylerTube/
 │   ├── thumbnails-middleware.js # /thumbnails/* (generated on demand)
 │   ├── standalone.js           # Production stream server (npm run server, :5180)
 │   ├── drive-ws.js             # /ws/mpeg1 ffmpeg → H.264 + PCM WebSocket (WebCodecs player)
+│   ├── youtube.js              # /api/youtube/* routes, yt-dlp search & streaming pipeline
 │   ├── media-files.js          # Safe path resolution, duration probing
 │   ├── upload.js               # /api/upload* routes: key check, chunked uploads, folders
 │   ├── upload-store.js         # Upload sessions on disk, free-space guard, ffprobe, final move
@@ -63,6 +65,8 @@ TylerTube/
         ├── webcodecs/          # WebCodecs engine, wire protocol, scheduler, player chrome
         ├── HistoryPage.jsx     # Watch history
         ├── FavoritesPage.jsx   # Favorites
+        ├── YouTubePage.jsx     # YouTube portal: search, URL launcher, stream to canvas
+        ├── ShortsPage.jsx      # YouTube Shorts portal: 9:16 layout, search, stream to canvas
         ├── UploadPage.jsx      # Upload page: key, drop zone, queue
         └── upload/             # FolderPicker, UploadQueue
 ```

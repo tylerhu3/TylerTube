@@ -11,6 +11,7 @@ import { createVisitorStore, createVisitorsHandler, defaultGeolocate } from "./v
 import { computeVideoSignature, recordSignature } from "./video-signature.js";
 import { createUploadHandler } from "./upload.js";
 import { createUploadStore } from "./upload-store.js";
+import { createYouTubeHandler } from "./youtube.js";
 
 // Dev/preview keep their own state file so testing never touches production history.
 function devUserStateHandler() {
@@ -100,6 +101,7 @@ export function videoCatalogPlugin() {
       server.middlewares.use(devUserStateHandler());
       server.middlewares.use(devVisitorsHandler());
       server.middlewares.use(devUploadHandler(videosDir));
+      server.middlewares.use(createYouTubeHandler());
       attachDriveWebSocketServer(server.httpServer, videosDir);
       server.watcher.add(videosDir);
       const reloadCatalog = (filePath) => {
@@ -129,6 +131,7 @@ export function videoCatalogPlugin() {
       server.middlewares.use(devUserStateHandler());
       server.middlewares.use(devVisitorsHandler());
       server.middlewares.use(devUploadHandler(videosDir));
+      server.middlewares.use(createYouTubeHandler());
       attachDriveWebSocketServer(server.httpServer, videosDir);
     }
   };

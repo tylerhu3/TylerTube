@@ -13,6 +13,7 @@ import { createUserStateHandler, createUserStateStore } from "./user-state.js";
 import { createVisitorStore, createVisitorsHandler, defaultGeolocate } from "./visitors.js";
 import { createUploadHandler, defaultUploadKey, signatureCatalogStatus } from "./upload.js";
 import { createUploadStore } from "./upload-store.js";
+import { createYouTubeHandler } from "./youtube.js";
 
 export const DEFAULT_DRIVE_PORT = 5180;
 const SHUTDOWN_TIMEOUT_MS = 2000;
@@ -48,12 +49,14 @@ export function startDriveServer({
     getKey: getUploadKey,
     catalogStatus: signatureCatalogStatus(videosDir)
   });
+  const handleYouTube = createYouTubeHandler();
 
   const server = http.createServer(async (req, res) => {
     const [pathname] = (req.url || "").split("?");
     if (await handleUserState(req, res)) return;
     if (await handleVisitors(req, res)) return;
     if (await handleUpload(req, res)) return;
+    if (await handleYouTube(req, res)) return;
     if (pathname === "/healthz" && (req.method === "GET" || req.method === "HEAD")) {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end(req.method === "HEAD" ? undefined : "ok\n");

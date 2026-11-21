@@ -10,3 +10,4 @@
 @import "./webcodecs-player.css"; /* WebCodecs player chrome: .yt-* */
 @import "./theme-picker.css"; /* Color theme picker (navbar + side menu) */
 @import "./upload.css"; /* Upload page: folder picker, drop zone, queue */
+@import "./youtube.css"; /* YouTube search & WebCodecs streaming portal */
