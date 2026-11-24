@@ -14,6 +14,7 @@ import { readJSON, readString, writeString, writeJSON } from "./lib/storage";
 import { createSyncStore } from "./lib/sync";
 import { fetchVisitors, recordVisit } from "./lib/visitors";
 import { isWebCodecsSupported } from "./components/webcodecs/protocol";
+import { fetchAuthStatus, logoutUser } from "./lib/auth";
 
 const STORAGE_KEY = "tylertube_watch_progress";
 const FAVORITES_STORAGE_KEY = "tylertube_favorites";
@@ -146,6 +147,46 @@ export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [visitors, setVisitors] = useState(null); // null = not loaded / unavailable
   const [selfVisitor, setSelfVisitor] = useState(null);
+
+  // Authentication & session state
+  const [auth, setAuth] = useState({ configured: false, authenticated: false, user: null });
+  const [authNotification, setAuthNotification] = useState(null);
+
+  // Check auth and URL callback parameters on mount
+  useEffect(() => {
+    fetchAuthStatus().then((status) => {
+      setAuth(status);
+    });
+
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      const authErr = searchParams.get("auth_error");
+      const authSuccess = searchParams.get("auth");
+      const targetPage = searchParams.get("page");
+
+      if (targetPage && (targetPage === "youtube" || targetPage === "shorts")) {
+        setCurrentPage(targetPage);
+      }
+
+      if (authErr) {
+        setAuthNotification(
+          `Google Sign-In notice: ${decodeURIComponent(authErr)}. Showing default explore view.`
+        );
+      }
+
+      if (authErr || authSuccess || targetPage) {
+        // Clean URL search parameters without triggering a full page reload
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch {
+      // Ignore URL parsing errors
+    }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await logoutUser();
+    setAuth((prev) => ({ ...prev, authenticated: false, user: null }));
+  }, []);
 
   // Log this visit once per page load; refresh the list whenever the menu opens.
   useEffect(() => {
@@ -660,6 +701,8 @@ export default function App() {
         onToggleMenu={() => setIsMenuOpen((prev) => !prev)}
         currentPage={currentPage}
         onNavigate={setCurrentPage}
+        auth={auth}
+        onLogout={handleLogout}
       />
 
       <SideMenu
@@ -680,6 +723,8 @@ export default function App() {
         visitors={visitors}
         selfVisitor={selfVisitor}
         onVisitorNameChange={handleVisitorNameChange}
+        auth={auth}
+        onLogout={handleLogout}
       />
 
       <main
@@ -691,6 +736,20 @@ export default function App() {
               }`
         }`}
       >
+        {authNotification && (
+          <div className="youtube-auth-notice-banner" role="alert">
+            <span>{authNotification}</span>
+            <button
+              type="button"
+              className="youtube-notice-close-btn"
+              onClick={() => setAuthNotification(null)}
+              aria-label="Dismiss notice"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         <VideoPlayer
           video={currentVideo}
           onEnded={handleNext}
@@ -767,6 +826,7 @@ export default function App() {
             currentVideoId={currentVideo?.id}
             favorites={favorites}
             onToggleFavorite={handleToggleFavorite}
+            auth={auth}
           />
         )}
 
@@ -776,6 +836,7 @@ export default function App() {
             currentVideoId={currentVideo?.id}
             favorites={favorites}
             onToggleFavorite={handleToggleFavorite}
+            auth={auth}
           />
         )}
 

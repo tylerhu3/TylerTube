@@ -3,6 +3,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { sendJSON } from "./http-utils.js";
+import { getValidAccessToken } from "./auth.js";
+import {
+  fetchUserSubscriptionsFeed,
+  fetchUserLikedVideos,
+  fetchUserShortsFeed
+} from "./youtube-feed.js";
 
 let cachedYtDlpPath = null;
 
@@ -349,7 +355,7 @@ export function spawnYouTubeStream({ videoId, seek = 0, quality = 720 }) {
   });
 }
 
-export function createYouTubeHandler() {
+export function createYouTubeHandler({ authStore } = {}) {
   return async function handleYouTubeRequest(req, res) {
     const url = req.url || "";
     if (!url.startsWith("/api/youtube")) return false;
@@ -409,6 +415,106 @@ export function createYouTubeHandler() {
         sendJSON(res, 200, result);
       } catch (err) {
         sendJSON(res, 502, { error: err.message || "Failed to search YouTube Shorts" });
+      }
+      return true;
+    }
+
+    // Authenticated personalized feeds
+    if (pathname === "/api/youtube/feed") {
+      if (!authStore) {
+        sendJSON(res, 401, { error: "Auth is not enabled on this server", code: "AUTH_DISABLED" });
+        return true;
+      }
+
+      const userId = authStore.getUserIdFromRequest(req);
+      if (!userId) {
+        sendJSON(res, 401, {
+          error: "Sign in with Google to view your subscriptions feed",
+          code: "AUTH_REQUIRED"
+        });
+        return true;
+      }
+
+      const accessToken = await getValidAccessToken(authStore, userId);
+      if (!accessToken) {
+        sendJSON(res, 401, {
+          error: "Session expired or missing access token. Please sign in again.",
+          code: "TOKEN_EXPIRED"
+        });
+        return true;
+      }
+
+      try {
+        const feed = await fetchUserSubscriptionsFeed(accessToken, { userId });
+        sendJSON(res, 200, feed);
+      } catch (err) {
+        sendJSON(res, 502, { error: err.message || "Failed to fetch YouTube feed" });
+      }
+      return true;
+    }
+
+    if (pathname === "/api/youtube/liked") {
+      if (!authStore) {
+        sendJSON(res, 401, { error: "Auth is not enabled on this server", code: "AUTH_DISABLED" });
+        return true;
+      }
+
+      const userId = authStore.getUserIdFromRequest(req);
+      if (!userId) {
+        sendJSON(res, 401, {
+          error: "Sign in with Google to view your liked videos",
+          code: "AUTH_REQUIRED"
+        });
+        return true;
+      }
+
+      const accessToken = await getValidAccessToken(authStore, userId);
+      if (!accessToken) {
+        sendJSON(res, 401, {
+          error: "Session expired. Please sign in again.",
+          code: "TOKEN_EXPIRED"
+        });
+        return true;
+      }
+
+      try {
+        const liked = await fetchUserLikedVideos(accessToken, { userId });
+        sendJSON(res, 200, liked);
+      } catch (err) {
+        sendJSON(res, 502, { error: err.message || "Failed to fetch liked videos" });
+      }
+      return true;
+    }
+
+    if (pathname === "/api/youtube/feed/shorts") {
+      if (!authStore) {
+        sendJSON(res, 401, { error: "Auth is not enabled on this server", code: "AUTH_DISABLED" });
+        return true;
+      }
+
+      const userId = authStore.getUserIdFromRequest(req);
+      if (!userId) {
+        sendJSON(res, 401, {
+          error: "Sign in with Google to view your personalized Shorts feed",
+          code: "AUTH_REQUIRED"
+        });
+        return true;
+      }
+
+      const accessToken = await getValidAccessToken(authStore, userId);
+      if (!accessToken) {
+        sendJSON(res, 401, {
+          error: "Session expired. Please sign in again.",
+          code: "TOKEN_EXPIRED"
+        });
+        return true;
+      }
+
+      try {
+        const shortsFeed = await fetchUserShortsFeed(accessToken, { userId });
+        sendJSON(res, 200, shortsFeed);
+      } catch (err) {
+        sendJSON(res, 502, { error: err.message || "Failed to fetch Shorts feed" });
       }
       return true;
     }

@@ -44,6 +44,65 @@
     min-height: 61px;
 }
 
+.side-menu-user-card {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.85rem 1.15rem;
+    background: var(--bg-main);
+    border-bottom: 1px solid var(--border);
+}
+
+.side-menu-user-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.side-menu-user-name {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.side-menu-user-email {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.side-menu-logout-btn {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 6px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.side-menu-logout-btn:hover {
+    color: var(--text-main);
+    border-color: var(--accent);
+}
+
+.side-menu-login-box {
+    padding: 0.75rem 1.15rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.side-menu-login-box .youtube-google-login-btn {
+    width: 100%;
+    justify-content: center;
+    font-size: 0.82rem;
+    padding: 0.4rem 0.5rem;
+}
+
 .side-menu-nav {
     padding: 0.75rem;
     overflow-y: auto;

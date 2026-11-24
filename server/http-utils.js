@@ -72,3 +72,26 @@ export function clientIp(req) {
     "";
   return ip.replace(/^::ffff:/, "");
 }
+
+// Parses cookies from request header into an object
+export function parseCookies(req) {
+  const list = {};
+  const rc = req?.headers?.cookie;
+  if (!rc) return list;
+  for (const part of rc.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx !== -1) {
+      const key = part.slice(0, idx).trim();
+      const val = part.slice(idx + 1).trim();
+      if (key) {
+        try {
+          list[key] = decodeURIComponent(val);
+        } catch {
+          list[key] = val;
+        }
+      }
+    }
+  }
+  return list;
+}
+

@@ -35,6 +35,7 @@ nginx_temp/
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # Claude Code: per-user local settings (shared .claude/settings.json is committed)
 .claude/settings.local.json

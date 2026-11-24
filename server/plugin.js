@@ -12,11 +12,20 @@ import { computeVideoSignature, recordSignature } from "./video-signature.js";
 import { createUploadHandler } from "./upload.js";
 import { createUploadStore } from "./upload-store.js";
 import { createYouTubeHandler } from "./youtube.js";
+import { createAuthStore, createAuthHandler } from "./auth.js";
 
 // Dev/preview keep their own state file so testing never touches production history.
-function devUserStateHandler() {
+function devUserStateHandler(authStore) {
   const file = path.resolve(process.cwd(), "data/user-state.dev.json");
-  return createUserStateHandler(createUserStateStore(file));
+  return createUserStateHandler(createUserStateStore(file), {
+    getProfileId: (req) => authStore?.getUserIdFromRequest(req) || "default"
+  });
+}
+
+function devAuthHandler() {
+  const file = path.resolve(process.cwd(), "data/auth-tokens.dev.json");
+  const authStore = createAuthStore(file);
+  return { authStore, authHandler: createAuthHandler(authStore) };
 }
 
 function devVisitorsHandler() {
@@ -94,14 +103,16 @@ export function videoCatalogPlugin() {
     configureServer(server) {
       const videosDir = path.resolve(process.cwd(), "public/videos");
       const thumbnailsDir = path.resolve(process.cwd(), "public/thumbnails");
+      const { authStore, authHandler } = devAuthHandler();
       server.middlewares.use(
         createThumbnailsMiddleware(thumbnailsDir, videosDir)
       );
       server.middlewares.use(createVideoStreamMiddleware(videosDir));
-      server.middlewares.use(devUserStateHandler());
+      server.middlewares.use(authHandler);
+      server.middlewares.use(devUserStateHandler(authStore));
       server.middlewares.use(devVisitorsHandler());
       server.middlewares.use(devUploadHandler(videosDir));
-      server.middlewares.use(createYouTubeHandler());
+      server.middlewares.use(createYouTubeHandler({ authStore }));
       attachDriveWebSocketServer(server.httpServer, videosDir);
       server.watcher.add(videosDir);
       const reloadCatalog = (filePath) => {
@@ -124,14 +135,16 @@ export function videoCatalogPlugin() {
     configurePreviewServer(server) {
       const videosDir = path.resolve(process.cwd(), "public/videos");
       const thumbnailsDir = path.resolve(process.cwd(), "public/thumbnails");
+      const { authStore, authHandler } = devAuthHandler();
       server.middlewares.use(
         createThumbnailsMiddleware(thumbnailsDir, videosDir)
       );
       server.middlewares.use(createVideoStreamMiddleware(videosDir));
-      server.middlewares.use(devUserStateHandler());
+      server.middlewares.use(authHandler);
+      server.middlewares.use(devUserStateHandler(authStore));
       server.middlewares.use(devVisitorsHandler());
       server.middlewares.use(devUploadHandler(videosDir));
-      server.middlewares.use(createYouTubeHandler());
+      server.middlewares.use(createYouTubeHandler({ authStore }));
       attachDriveWebSocketServer(server.httpServer, videosDir);
     }
   };

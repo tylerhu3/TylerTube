@@ -14,6 +14,7 @@ import { createVisitorStore, createVisitorsHandler, defaultGeolocate } from "./v
 import { createUploadHandler, defaultUploadKey, signatureCatalogStatus } from "./upload.js";
 import { createUploadStore } from "./upload-store.js";
 import { createYouTubeHandler } from "./youtube.js";
+import { createAuthStore, createAuthHandler } from "./auth.js";
 
 export const DEFAULT_DRIVE_PORT = 5180;
 const SHUTDOWN_TIMEOUT_MS = 2000;
@@ -25,6 +26,8 @@ const DEFAULT_VIDEOS_DIR = fileURLToPath(new URL("../public/videos", import.meta
 export const DEFAULT_STATE_FILE = fileURLToPath(new URL("../data/user-state.json", import.meta.url));
 // Gitignored. Override with TYLERTUBE_VISITORS_FILE.
 export const DEFAULT_VISITORS_FILE = fileURLToPath(new URL("../data/visitors.json", import.meta.url));
+// Gitignored. Override with TYLERTUBE_AUTH_FILE.
+export const DEFAULT_AUTH_FILE = fileURLToPath(new URL("../data/auth-tokens.json", import.meta.url));
 
 // Optional GB override from the environment; undefined → the store's default (5 GB).
 function envGigabytes(name) {
@@ -38,21 +41,27 @@ export function startDriveServer({
   videosDir = DEFAULT_VIDEOS_DIR,
   stateFile = process.env.TYLERTUBE_STATE_FILE || DEFAULT_STATE_FILE,
   visitorsFile = process.env.TYLERTUBE_VISITORS_FILE || DEFAULT_VISITORS_FILE,
+  authFile = process.env.TYLERTUBE_AUTH_FILE || DEFAULT_AUTH_FILE,
   geolocate = defaultGeolocate(),
   getUploadKey = defaultUploadKey(),
   uploadReserveBytes = envGigabytes("TYLERTUBE_UPLOAD_RESERVE_GB")
 } = {}) {
-  const handleUserState = createUserStateHandler(createUserStateStore(stateFile));
+  const authStore = createAuthStore(authFile);
+  const handleAuth = createAuthHandler(authStore);
+  const handleUserState = createUserStateHandler(createUserStateStore(stateFile), {
+    getProfileId: (req) => authStore.getUserIdFromRequest(req) || "default"
+  });
   const handleVisitors = createVisitorsHandler(createVisitorStore(visitorsFile, { geolocate }));
   const uploadStore = createUploadStore({ videosDir, reserveBytes: uploadReserveBytes });
   const handleUpload = createUploadHandler(uploadStore, {
     getKey: getUploadKey,
     catalogStatus: signatureCatalogStatus(videosDir)
   });
-  const handleYouTube = createYouTubeHandler();
+  const handleYouTube = createYouTubeHandler({ authStore });
 
   const server = http.createServer(async (req, res) => {
     const [pathname] = (req.url || "").split("?");
+    if (await handleAuth(req, res)) return;
     if (await handleUserState(req, res)) return;
     if (await handleVisitors(req, res)) return;
     if (await handleUpload(req, res)) return;
