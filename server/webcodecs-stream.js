@@ -143,8 +143,13 @@ export function buildAtempoChain(speed) {
 // Both outputs start at stream time 0 (fps start_time=0, aresample first_pts=0), so a client can
 // place video frame n at n/fps s and audio sample k at k/44100 s on one timeline.
 // `fps` is the output rate from resolveOutputFps() (default WC_FPS).
+// When `audioInput` is provided (e.g. separate DASH video + audio URLs from YouTube), both inputs
+// receive the same input-side `-ss` seek so video and audio start aligned at stream time 0.
 export function buildWebCodecsFfmpegArgs({
   input,
+  audioInput = null,
+  httpHeaders = "",
+  isNetwork = false,
   seek = 0,
   speed = 1,
   quality = 720,
@@ -154,19 +159,32 @@ export function buildWebCodecsFfmpegArgs({
   const spd = Number(speed) || 1;
   const outFps = Number(fps) > 0 ? Number(fps) : WC_FPS;
   const { width, height, bitrate, level } = webCodecsVideoParams(quality, outFps);
-  const args = [];
-  if (seek > 0) args.push("-ss", Number(seek).toFixed(3));
   const burstReadRate = Math.min(2.5, Math.max(1.3, spd * 1.5));
-  args.push(
-    "-readrate",
-    String(burstReadRate),
-    "-readrate_initial_burst",
-    "10.0",
-    "-fflags",
-    "+genpts",
-    "-i",
-    input
-  );
+  const args = [];
+
+  const pushInput = (src) => {
+    if (isNetwork) {
+      args.push("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5");
+      if (httpHeaders) args.push("-headers", httpHeaders);
+      args.push("-probesize", "65536", "-analyzeduration", "500000");
+    }
+    if (seek > 0) args.push("-ss", Number(seek).toFixed(3));
+    args.push(
+      "-readrate",
+      String(burstReadRate),
+      "-readrate_initial_burst",
+      "10.0",
+      "-fflags",
+      "+genpts",
+      "-i",
+      src
+    );
+  };
+
+  pushInput(input);
+  if (hasAudio && audioInput) {
+    pushInput(audioInput);
+  }
 
   const vf = [];
   if (Math.abs(spd - 1) > 0.01) vf.push(`setpts=PTS/${spd}`);
@@ -216,7 +234,7 @@ export function buildWebCodecsFfmpegArgs({
     const af = [...buildAtempoChain(spd), `aresample=${WC_AUDIO_RATE}:async=1000:first_pts=0`];
     args.push(
       "-map",
-      "0:a:0",
+      audioInput ? "1:a:0" : "0:a:0",
       "-vn",
       "-sn",
       "-af",

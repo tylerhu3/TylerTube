@@ -4,7 +4,10 @@ import {
   extractYouTubeVideoId,
   isYouTubeTarget,
   findYtDlpBinary,
-  createYouTubeHandler
+  createYouTubeHandler,
+  extractUrlExpireMs,
+  formatFfmpegHeaders,
+  selectYouTubeStreams
 } from "../server/youtube.js";
 
 test("extractYouTubeVideoId: parses various YouTube formats", () => {
@@ -68,10 +71,12 @@ test("findYtDlpBinary resolves to a string", () => {
 test("createYouTubeHandler: routing and method checks", async () => {
   const handler = createYouTubeHandler();
 
-  // Non-matching path should return false
+  // Non-matching path should return false and invoke connect `next` middleware
   const reqOther = { url: "/api/state", method: "GET" };
   const resOther = {};
-  assert.equal(await handler(reqOther, resOther), false);
+  let nextCalled = false;
+  assert.equal(await handler(reqOther, resOther, () => { nextCalled = true; }), false);
+  assert.equal(nextCalled, true);
 
   // Non-GET method on /api/youtube should return 405
   let status = 0;
@@ -155,4 +160,123 @@ test("standalone server: /api/youtube routing", async () => {
   } finally {
     await drive.close();
   }
+});
+
+test("extractUrlExpireMs and formatFfmpegHeaders", () => {
+  assert.equal(
+    extractUrlExpireMs("https://rr1.googlevideo.com/videoplayback?expire=1700000000&id=1"),
+    1700000000 * 1000
+  );
+  assert.equal(extractUrlExpireMs("https://example.com/no-expire"), null);
+  assert.equal(extractUrlExpireMs("not a url"), null);
+
+  assert.equal(
+    formatFfmpegHeaders({ "User-Agent": "Test/1.0", Accept: "*/*", Bad: "a\r\nb" }),
+    "User-Agent: Test/1.0\r\nAccept: */*\r\nBad: ab\r\n"
+  );
+  assert.equal(formatFfmpegHeaders(null), "");
+});
+
+test("selectYouTubeStreams: prefers direct HTTPS vp9 > avc1 > av01 and opus audio", () => {
+  const formats = [
+    {
+      protocol: "https",
+      url: "https://cdn/v-av01-720",
+      vcodec: "av01.0.05M.08",
+      acodec: "none",
+      height: 720,
+      fps: 30,
+      tbr: 2000,
+      http_headers: { "User-Agent": "UA" }
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/v-avc1-720",
+      vcodec: "avc1.4D401F",
+      acodec: "none",
+      height: 720,
+      fps: 30,
+      tbr: 1500
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/v-vp9-720",
+      vcodec: "vp9",
+      acodec: "none",
+      height: 720,
+      fps: 60,
+      tbr: 1200,
+      http_headers: { "User-Agent": "UA-VP9" }
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/v-vp9-1080",
+      vcodec: "vp9",
+      acodec: "none",
+      height: 1080,
+      fps: 60,
+      tbr: 3000
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/a-m4a",
+      vcodec: "none",
+      acodec: "mp4a.40.2",
+      abr: 128
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/a-opus",
+      vcodec: "none",
+      acodec: "opus",
+      abr: 128
+    }
+  ];
+
+  const pick720 = selectYouTubeStreams(formats, 720);
+  assert.equal(pick720.videoUrl, "https://cdn/v-vp9-720");
+  assert.equal(pick720.audioUrl, "https://cdn/a-opus");
+  assert.equal(pick720.hasAudio, true);
+  assert.equal(pick720.fps, 60);
+  assert.equal(pick720.isDirect, true);
+  assert.deepEqual(pick720.headers, { "User-Agent": "UA-VP9" });
+
+  const pick1080 = selectYouTubeStreams(formats, 1080);
+  assert.equal(pick1080.videoUrl, "https://cdn/v-vp9-1080");
+
+  // Falls back to muxed when no separate audio exists
+  const muxedOnly = selectYouTubeStreams(
+    [
+      {
+        protocol: "https",
+        url: "https://cdn/muxed-720",
+        vcodec: "avc1",
+        acodec: "mp4a",
+        height: 720,
+        fps: 25
+      }
+    ],
+    720
+  );
+  assert.equal(muxedOnly.videoUrl, "https://cdn/muxed-720");
+  assert.equal(muxedOnly.audioUrl, null);
+  assert.equal(muxedOnly.hasAudio, true);
+  assert.equal(muxedOnly.fps, 25);
+
+  // Falls back to HLS when no direct HTTPS exists
+  const hlsOnly = selectYouTubeStreams(
+    [
+      {
+        protocol: "m3u8_native",
+        url: "https://cdn/live.m3u8",
+        vcodec: "avc1",
+        acodec: "mp4a",
+        height: 720,
+        fps: 30
+      }
+    ],
+    720
+  );
+  assert.equal(hlsOnly.videoUrl, "https://cdn/live.m3u8");
+  assert.equal(hlsOnly.isDirect, false);
 });

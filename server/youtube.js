@@ -86,29 +86,196 @@ export function isYouTubeTarget(target) {
   return Boolean(extractYouTubeVideoId(target));
 }
 
-// In-memory caches for info and search results to reduce yt-dlp latency
+// In-memory caches for info, resolved stream formats, and search results to reduce yt-dlp latency
 const infoCache = new Map();
+const formatsCache = new Map();
+const inFlightInfo = new Map();
 const searchCache = new Map();
 const INFO_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const FORMATS_CACHE_MAX_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const URL_EXPIRE_MARGIN_MS = 5 * 60 * 1000; // Refresh 5 min before CDN expiry
 const SEARCH_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 export function clearYouTubeCaches() {
   infoCache.clear();
+  formatsCache.clear();
+  inFlightInfo.clear();
   searchCache.clear();
 }
 
-export function fetchYouTubeInfo(videoId) {
-  return new Promise((resolve, reject) => {
-    const id = extractYouTubeVideoId(videoId);
-    if (!id) {
-      return reject(new Error("Invalid YouTube video ID"));
+export function invalidateYouTubeCache(videoId) {
+  const id = extractYouTubeVideoId(videoId);
+  if (!id) return;
+  infoCache.delete(id);
+  formatsCache.delete(id);
+}
+
+// Parse Google CDN `expire=<unix_sec>` query param from a direct stream URL.
+export function extractUrlExpireMs(url) {
+  if (!url || typeof url !== "string") return null;
+  try {
+    const parsed = new URL(url);
+    const exp = Number(parsed.searchParams.get("expire"));
+    if (Number.isFinite(exp) && exp > 0) return exp * 1000;
+  } catch {
+    // Ignore invalid URLs
+  }
+  return null;
+}
+
+// Prefer codecs that seek quickly and decode lightly in ffmpeg: vp9 > avc1 > other > av01.
+function videoCodecRank(vcodec) {
+  const c = String(vcodec || "").toLowerCase();
+  if (c.startsWith("vp9") || c.startsWith("vp09")) return 3;
+  if (c.startsWith("avc1") || c.startsWith("h264")) return 2;
+  if (c.startsWith("av01") || c.startsWith("av1")) return 0;
+  return 1;
+}
+
+function isDirectHttpProtocol(protocol) {
+  return protocol === "https" || protocol === "http";
+}
+
+function isHlsProtocol(protocol) {
+  return protocol === "m3u8" || protocol === "m3u8_native";
+}
+
+// Format http_headers map into an ffmpeg `-headers` string (`Key: Value\r\n`).
+export function formatFfmpegHeaders(headers) {
+  if (!headers || typeof headers !== "object") return "";
+  const lines = [];
+  for (const [k, v] of Object.entries(headers)) {
+    if (!k || v == null) continue;
+    const key = String(k).replace(/[\r\n]/g, "").trim();
+    const val = String(v).replace(/[\r\n]/g, "").trim();
+    if (key && val) lines.push(`${key}: ${val}`);
+  }
+  return lines.length ? `${lines.join("\r\n")}\r\n` : "";
+}
+
+// Pure selector: picks the best video + audio stream URLs for a target max height.
+// Prefers direct HTTPS (fast HTTP Range seeking) and avoids AV1 when VP9/H.264 is available.
+export function selectYouTubeStreams(formats, quality = 720) {
+  if (!Array.isArray(formats) || formats.length === 0) return null;
+  const maxHeight = Math.max(144, Number(quality) || 720);
+
+  const pickFromPool = (pool) => {
+    const videoOnly = pool.filter(
+      (f) => f && f.url && f.vcodec && f.vcodec !== "none" && (!f.acodec || f.acodec === "none")
+    );
+    const audioOnly = pool.filter(
+      (f) => f && f.url && f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none")
+    );
+    const muxed = pool.filter(
+      (f) => f && f.url && f.vcodec && f.vcodec !== "none" && f.acodec && f.acodec !== "none"
+    );
+
+    const pickVideo = (list) => {
+      if (!list.length) return null;
+      const underCap = list.filter((f) => (Number(f.height) || 0) <= maxHeight);
+      const candidates = underCap.length ? underCap : list;
+      return [...candidates].sort((a, b) => {
+        const ha = Number(a.height) || 0;
+        const hb = Number(b.height) || 0;
+        if (underCap.length) {
+          if (hb !== ha) return hb - ha;
+        } else if (ha !== hb) {
+          return ha - hb;
+        }
+        const ca = videoCodecRank(a.vcodec);
+        const cb = videoCodecRank(b.vcodec);
+        if (cb !== ca) return cb - ca;
+        return (Number(b.tbr) || Number(b.vbr) || 0) - (Number(a.tbr) || Number(a.vbr) || 0);
+      })[0];
+    };
+
+    const pickAudio = (list) => {
+      if (!list.length) return null;
+      return [...list].sort((a, b) => {
+        const opusA = String(a.acodec || "").toLowerCase().includes("opus") ? 1 : 0;
+        const opusB = String(b.acodec || "").toLowerCase().includes("opus") ? 1 : 0;
+        if (opusB !== opusA) return opusB - opusA;
+        return (Number(b.abr) || Number(b.tbr) || 0) - (Number(a.abr) || Number(a.tbr) || 0);
+      })[0];
+    };
+
+    const v = pickVideo(videoOnly);
+    const a = pickAudio(audioOnly);
+    if (v && a) {
+      return {
+        videoUrl: v.url,
+        audioUrl: a.url,
+        hasAudio: true,
+        fps: Number(v.fps) > 0 ? Number(v.fps) : 0,
+        headers: v.http_headers || a.http_headers || null,
+        isDirect: isDirectHttpProtocol(v.protocol) && isDirectHttpProtocol(a.protocol)
+      };
     }
 
-    const cached = infoCache.get(id);
-    if (cached && Date.now() - cached.timestamp < INFO_CACHE_TTL_MS) {
-      return resolve(cached.data);
+    const m = pickVideo(muxed);
+    if (m) {
+      return {
+        videoUrl: m.url,
+        audioUrl: null,
+        hasAudio: true,
+        fps: Number(m.fps) > 0 ? Number(m.fps) : 0,
+        headers: m.http_headers || null,
+        isDirect: isDirectHttpProtocol(m.protocol)
+      };
     }
 
+    if (v) {
+      return {
+        videoUrl: v.url,
+        audioUrl: null,
+        hasAudio: false,
+        fps: Number(v.fps) > 0 ? Number(v.fps) : 0,
+        headers: v.http_headers || null,
+        isDirect: isDirectHttpProtocol(v.protocol)
+      };
+    }
+
+    return null;
+  };
+
+  const directPool = formats.filter((f) => f && isDirectHttpProtocol(f.protocol));
+  const directPick = pickFromPool(directPool);
+  if (directPick) return directPick;
+
+  const hlsPool = formats.filter((f) => f && isHlsProtocol(f.protocol));
+  return pickFromPool(hlsPool);
+}
+
+function computeFormatsExpiryMs(formats, now) {
+  let earliest = now + FORMATS_CACHE_MAX_TTL_MS;
+  for (const f of formats) {
+    if (!f || !isDirectHttpProtocol(f.protocol) || !f.url) continue;
+    const exp = extractUrlExpireMs(f.url);
+    if (exp && exp - URL_EXPIRE_MARGIN_MS < earliest) {
+      earliest = exp - URL_EXPIRE_MARGIN_MS;
+    }
+  }
+  return Math.max(now + 60 * 1000, earliest);
+}
+
+function fetchYouTubeRawInfo(id, { forceRefresh = false } = {}) {
+  const now = Date.now();
+  if (!forceRefresh) {
+    const cachedInfo = infoCache.get(id);
+    const cachedFormats = formatsCache.get(id);
+    if (
+      cachedInfo &&
+      cachedFormats &&
+      now - cachedInfo.timestamp < INFO_CACHE_TTL_MS &&
+      now < cachedFormats.expiresAt
+    ) {
+      return Promise.resolve({ info: cachedInfo.data, formats: cachedFormats.formats });
+    }
+    const pending = inFlightInfo.get(id);
+    if (pending) return pending;
+  }
+
+  const promise = new Promise((resolve, reject) => {
     const binary = findYtDlpBinary();
     const args = [
       "-J",
@@ -156,13 +323,56 @@ export function fetchYouTubeInfo(videoId) {
           uploadDate: parsed.upload_date || ""
         };
 
-        infoCache.set(id, { timestamp: Date.now(), data: info });
-        resolve(info);
+        const formats = Array.isArray(parsed.formats) ? parsed.formats : [];
+        const ts = Date.now();
+        infoCache.set(id, { timestamp: ts, data: info });
+        if (formats.length > 0) {
+          formatsCache.set(id, {
+            timestamp: ts,
+            expiresAt: computeFormatsExpiryMs(formats, ts),
+            formats
+          });
+        }
+        resolve({ info, formats });
       } catch (err) {
         reject(new Error(`Failed to parse yt-dlp metadata JSON: ${err.message}`));
       }
     });
   });
+
+  inFlightInfo.set(id, promise);
+  promise.finally(() => {
+    if (inFlightInfo.get(id) === promise) inFlightInfo.delete(id);
+  });
+  return promise;
+}
+
+export function fetchYouTubeInfo(videoId) {
+  const id = extractYouTubeVideoId(videoId);
+  if (!id) {
+    return Promise.reject(new Error("Invalid YouTube video ID"));
+  }
+  const cached = infoCache.get(id);
+  if (cached && Date.now() - cached.timestamp < INFO_CACHE_TTL_MS) {
+    return Promise.resolve(cached.data);
+  }
+  return fetchYouTubeRawInfo(id).then(({ info }) => info);
+}
+
+// Resolves direct video + audio stream URLs for a YouTube video at the requested quality.
+// Reuses cached yt-dlp format data so seeks and quality/speed changes do not re-run yt-dlp.
+export async function resolveYouTubeStreamUrls(videoId, quality = 720, { forceRefresh = false } = {}) {
+  const id = extractYouTubeVideoId(videoId);
+  if (!id) {
+    throw new Error("Invalid YouTube video ID for streaming");
+  }
+  const { info, formats } = await fetchYouTubeRawInfo(id, { forceRefresh });
+  const selected = selectYouTubeStreams(formats, quality);
+  return {
+    info,
+    duration: info.duration || 0,
+    ...(selected || { videoUrl: null, audioUrl: null, hasAudio: true, fps: 0, headers: null, isDirect: false })
+  };
 }
 
 export function searchYouTube(query, limit = 20) {
@@ -356,9 +566,12 @@ export function spawnYouTubeStream({ videoId, seek = 0, quality = 720 }) {
 }
 
 export function createYouTubeHandler({ authStore } = {}) {
-  return async function handleYouTubeRequest(req, res) {
+  return async function handleYouTubeRequest(req, res, next) {
     const url = req.url || "";
-    if (!url.startsWith("/api/youtube")) return false;
+    if (!url.startsWith("/api/youtube")) {
+      if (next) next();
+      return false;
+    }
 
     const [pathname, rawQuery = ""] = url.split("?");
     const params = new URLSearchParams(rawQuery);

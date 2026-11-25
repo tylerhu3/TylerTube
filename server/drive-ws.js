@@ -13,8 +13,10 @@ import {
 } from "./media-files.js";
 import {
   extractYouTubeVideoId,
-  fetchYouTubeInfo,
+  formatFfmpegHeaders,
+  invalidateYouTubeCache,
   isYouTubeTarget,
+  resolveYouTubeStreamUrls,
   spawnYouTubeStream
 } from "./youtube.js";
 import {
@@ -86,6 +88,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     let pauseHoldTimer = null;
     let drainInterval = null;
     let wsClosed = false;
+    let streamSeq = 0;
 
     const isYouTube = isYouTubeTarget(rawTarget);
     const youtubeId = isYouTube ? extractYouTubeVideoId(rawTarget) : null;
@@ -96,9 +99,11 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
 
     if (isYouTube) {
       try {
-        const info = await fetchYouTubeInfo(youtubeId);
+        const resolved = await resolveYouTubeStreamUrls(youtubeId, currentQuality);
         if (wsClosed) return;
-        duration = info.duration || 0;
+        duration = resolved.duration || 0;
+        hasAudio = resolved.hasAudio;
+        if (resolved.fps > 0) sourceFps = resolved.fps;
       } catch {
         if (wsClosed) return;
         // Proceed with duration = 0 if probe failed
@@ -212,18 +217,40 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     });
 
     function doStream(streamUrl, isReset) {
+      const mySeq = ++streamSeq;
       killActiveFfmpeg();
       if (wsClosed) return;
-      doStreamWebCodecs(streamUrl, isReset);
+      doStreamWebCodecs(streamUrl, isReset, { mySeq });
     }
 
     // WebCodecs variant of doStream: H.264 Annex-B (stdout) + PCM (fd 3) → binary frames.
     // Loop is client-driven here: the client may hold up to WC_MAX_AHEAD_SEC unplayed, so on
     // ffmpeg exit we always send "ended" and the client seeks to 0 when it really reaches the end.
-    function doStreamWebCodecs(streamUrl, isReset) {
+    async function doStreamWebCodecs(
+      streamUrl,
+      isReset,
+      { mySeq = streamSeq, forceRefresh = false, retriedRefresh = false } = {}
+    ) {
       const spd = currentSpeed;
+      let ytStreams = null;
+      if (isYouTube) {
+        try {
+          ytStreams = await resolveYouTubeStreamUrls(youtubeId, currentQuality, {
+            forceRefresh
+          });
+        } catch {
+          ytStreams = null;
+        }
+        if (wsClosed || mySeq !== streamSeq) return;
+        if (ytStreams) {
+          if (ytStreams.duration > 0) duration = ytStreams.duration;
+          hasAudio = ytStreams.hasAudio;
+          if (ytStreams.fps > 0) sourceFps = ytStreams.fps;
+        }
+      }
+
       const fps = outputFps().fps;
-      if (isReset) {
+      if (isReset || retriedRefresh) {
         sendJson({
           type: "reset",
           seekTime: currentSeek,
@@ -240,7 +267,24 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
 
       try {
         let ffmpeg;
-        if (isYouTube) {
+        if (isYouTube && ytStreams && ytStreams.videoUrl) {
+          const args = buildWebCodecsFfmpegArgs({
+            input: ytStreams.videoUrl,
+            audioInput: ytStreams.audioUrl,
+            httpHeaders: formatFfmpegHeaders(ytStreams.headers),
+            isNetwork: true,
+            seek: currentSeek,
+            speed: spd,
+            quality: currentQuality,
+            fps,
+            hasAudio
+          });
+          ffmpeg = spawn("ffmpeg", args, {
+            stdio: hasAudio
+              ? ["ignore", "pipe", "pipe", "pipe"]
+              : ["ignore", "pipe", "pipe"]
+          });
+        } else if (isYouTube) {
           activeYtDlp = spawnYouTubeStream({
             videoId: youtubeId,
             seek: currentSeek,
@@ -284,6 +328,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
         const MAX_WS_BUFFER = 2 * 1024 * 1024;
         let frameIndex = 0;
         let keyframeSent = false;
+        let producedMedia = false;
         let socketPaused = false; // ws.bufferedAmount backpressure
         let flowPaused = false; // too far ahead of the client's playback
         let playedSec = 0; // wall-clock playback estimate (excludes paused time)
@@ -312,6 +357,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
         };
 
         const sendAccessUnit = (au) => {
+          producedMedia = true;
           sendBinary(packVideoMessage(au.data, au.keyframe, frameTimestampUs(frameIndex, fps)));
           frameIndex += 1;
           if (au.keyframe) keyframeSent = true;
@@ -345,7 +391,10 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
           audioPipe.on("data", (chunk) => {
             if (wsClosed || activeFfmpeg !== ffmpeg) return;
             const out = pcm.push(chunk);
-            if (out) sendBinary(packAudioMessage(out));
+            if (out) {
+              producedMedia = true;
+              sendBinary(packAudioMessage(out));
+            }
           });
           audioPipe.on("error", () => {});
         }
@@ -397,6 +446,23 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             return;
           }
           activeFfmpeg = null;
+          // Cached YouTube CDN URLs can expire (HTTP 403); refresh once before giving up.
+          if (
+            isYouTube &&
+            ytStreams &&
+            ytStreams.videoUrl &&
+            !producedMedia &&
+            !retriedRefresh &&
+            mySeq === streamSeq
+          ) {
+            invalidateYouTubeCache(youtubeId);
+            doStreamWebCodecs(streamUrl, isReset, {
+              mySeq,
+              forceRefresh: true,
+              retriedRefresh: true
+            });
+            return;
+          }
           if (code !== null) {
             sendJson({ type: "status", message: `Stream ended (code ${code})` });
           }

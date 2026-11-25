@@ -201,6 +201,38 @@ test("buildWebCodecsFfmpegArgs: H.264 baseline Annex-B on pipe:1, PCM on pipe:3"
   assert.equal(noAudio[noAudio.indexOf("-level:v") + 1], "3.1");
 });
 
+test("buildWebCodecsFfmpegArgs: dual network inputs get symmetric -ss, headers, reconnect, and 1:a:0 map", () => {
+  const args = buildWebCodecsFfmpegArgs({
+    input: "https://cdn/video.webm",
+    audioInput: "https://cdn/audio.webm",
+    httpHeaders: "User-Agent: Test\r\n",
+    isNetwork: true,
+    seek: 60.5,
+    speed: 1.25,
+    quality: 720,
+    fps: 30,
+    hasAudio: true
+  });
+  const firstInputIdx = args.indexOf("-i");
+  const secondInputIdx = args.indexOf("-i", firstInputIdx + 1);
+  assert.ok(firstInputIdx > 0 && secondInputIdx > firstInputIdx);
+  assert.equal(args[firstInputIdx + 1], "https://cdn/video.webm");
+  assert.equal(args[secondInputIdx + 1], "https://cdn/audio.webm");
+
+  const firstSs = args.indexOf("-ss");
+  const secondSs = args.indexOf("-ss", firstInputIdx);
+  assert.ok(firstSs >= 0 && firstSs < firstInputIdx);
+  assert.ok(secondSs > firstInputIdx && secondSs < secondInputIdx);
+  assert.equal(args[firstSs + 1], "60.500");
+  assert.equal(args[secondSs + 1], "60.500");
+
+  assert.equal(args[args.indexOf("-headers") + 1], "User-Agent: Test\r\n");
+  assert.equal(args[args.indexOf("-headers", firstInputIdx) + 1], "User-Agent: Test\r\n");
+  assert.ok(args.includes("-reconnect"));
+  assert.equal(args[args.indexOf("-map") + 1], "0:v:0");
+  assert.equal(args[args.indexOf("-map", args.indexOf("-map") + 1) + 1], "1:a:0");
+});
+
 test("selectDueFrame picks the newest due frame; -1 when all are in the future", () => {
   const ts = [0, 33333, 66667, 100000];
   assert.equal(selectDueFrame(ts, -10000, 0), -1);
