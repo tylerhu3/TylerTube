@@ -20,12 +20,19 @@ export function findYtDlpBinary() {
     return cachedYtDlpPath;
   }
 
-  const candidates = [
-    "/opt/homebrew/bin/yt-dlp",
-    "/usr/local/bin/yt-dlp",
-    path.join(process.env.HOME || "", ".local/bin/yt-dlp"),
-    "/usr/bin/yt-dlp"
-  ];
+  const candidates =
+    process.platform === "win32"
+      ? [
+          path.join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Links", "yt-dlp.exe"),
+          path.join(process.env.USERPROFILE || "", "scoop", "shims", "yt-dlp.exe"),
+          "C:\\ProgramData\\chocolatey\\bin\\yt-dlp.exe"
+        ]
+      : [
+          "/opt/homebrew/bin/yt-dlp",
+          "/usr/local/bin/yt-dlp",
+          path.join(process.env.HOME || "", ".local/bin/yt-dlp"),
+          "/usr/bin/yt-dlp"
+        ];
 
   for (const candidate of candidates) {
     if (candidate && fs.existsSync(candidate)) {

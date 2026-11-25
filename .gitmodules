@@ -1,0 +1,5 @@
+[submodule "redirect-site"]
+	path = redirect-site
+	url = https://github.com/tylerhu3/RedirectUrl.git
+	branch = main
+	ignore = all

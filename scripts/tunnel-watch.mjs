@@ -44,7 +44,12 @@ const catalog = { seen: null, failed: null, building: false };
 
 function runBuild() {
   return new Promise((resolve) => {
-    const child = spawn("npm", ["run", "build"], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("npm", ["run", "build"], {
+      cwd: ROOT,
+      shell: process.platform === "win32",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
     let output = "";
     const collect = (chunk) => {
       output = (output + chunk).slice(-4000);

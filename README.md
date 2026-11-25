@@ -127,6 +127,14 @@ Thumbnails are automatically generated and paired with every video in `public/vi
 
 ## Quick Start
 
+### 0. Clone (including `redirect-site/` submodule)
+
+```bash
+git clone --recurse-submodules https://github.com/tylerhu3/TylerTube.git
+```
+
+If you already cloned without `--recurse-submodules`, run `git submodule update --init` (or let `scripts/tunnel.mjs` clone `redirect-site/` automatically on first publish).
+
 ### 1. Install Dependencies & Run in Development
 
 ```zsh
@@ -207,19 +215,25 @@ Copy the `https://xxxx.trycloudflare.com` URL printed in the terminal to stream 
 #### Stable public address (Netlify redirect) + one-command deploy
 
 The quick-tunnel URL changes on every restart, so a Netlify site
-([tylerhu3/RedirectUrl](https://github.com/tylerhu3/RedirectUrl), cloned into `redirect-site/`,
-gitignored) 302-redirects to whatever the current one is.
+([tylerhu3/RedirectUrl](https://github.com/tylerhu3/RedirectUrl), tracked as a git submodule at
+`redirect-site/`) 302-redirects to whatever the current one is.
 
-```zsh
+```bash
 npm run deploy:public            # check, test, build, Nginx, stream server, tunnel, redirect
 npm run deploy:public -- --dry-run   # build + smoke test; shows what it would push, changes nothing
 npm run tunnel status            # running tunnel(s) for :8080 and the published URL
 ```
 
-`deploy:public` installs the LaunchAgent `com.tylertube.tunnel` (`scripts/tunnel-watch.mjs`), which
-from then on reuses or starts the quick tunnel and pushes the redirect repo whenever the URL
-changes (logs: `/tmp/tylertube-tunnel.log`, `/tmp/tylertube-cloudflared.log`). Netlify redeploys
-on each push.
+Both `scripts/deploy-public.mjs` and `scripts/tunnel.mjs` detect your OS and automatically dispatch
+to the macOS (`*.mac.mjs`) or Windows (`*.win.mjs`) implementation:
+
+- **macOS:** `deploy:public` copies `nginx.conf` into Homebrew Nginx, restarts `com.tylertube.drive`,
+  and installs the LaunchAgent `com.tylertube.tunnel` (`scripts/tunnel-watch.mjs`). Logs:
+  `/tmp/tylertube-tunnel.log`, `/tmp/tylertube-cloudflared.log`, `/tmp/tylertube-drive.log`.
+- **Windows:** Requires `nginx` (e.g. `C:\nginx` or set `NGINX_DIR`), `cloudflared`, `ffmpeg`/`ffprobe`,
+  and Git authenticated to GitHub. `deploy:public` rewrites `nginx.conf` with your Windows repo path
+  into `<NGINX_DIR>\conf\nginx.conf`, starts/reloads Nginx, restarts `server/standalone.js`, starts
+  `scripts/tunnel-watch.mjs` in the background, and publishes the tunnel URL. Logs go to `%TEMP%\tylertube-*.log`.
 
 The same keeper also rebuilds when you add, rename or remove files in `public/videos/`: about a
 minute after the folder stops changing it runs `npm run build` (new thumbnails included), and the

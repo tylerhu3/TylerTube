@@ -89,7 +89,7 @@ Internet ─► Netlify (redirect-site/, 302) ─► *.trycloudflare.com quick t
 | `scripts/generate-thumbnails.js` | ffmpeg thumbnail generator (also imported by `server/`) |
 | `scripts/generate-icons.py` | Regenerates favicons in `public/` |
 | `scripts/launchd/` | LaunchAgents: `com.tylertube.drive` (`npm run server`), `com.tylertube.tunnel` (`tunnel-watch.mjs`) |
-| `scripts/tunnel.mjs`, `tunnel-watch.mjs`, `deploy-public.mjs` | Quick-tunnel discovery/start, Netlify redirect push (`redirect-site/`, its own repo, gitignored), auto-rebuild on new videos, `npm run deploy:public` |
+| `scripts/tunnel.mjs`, `tunnel.{mac,win}.mjs`, `tunnel-common.mjs`, `tunnel-watch.mjs`, `deploy-public.mjs`, `deploy-public.{mac,win}.mjs` | OS-dispatched quick-tunnel discovery/start, Netlify redirect push (`redirect-site/`, git submodule with `ignore = all`), auto-rebuild on new videos, `npm run deploy:public` |
 | `nginx.conf` | Production config (copied to `/opt/homebrew/etc/nginx/`) |
 | `public/videos/`, `public/thumbnails/` | Media, ~51 GB, gitignored. **Never read or list recursively.** |
 

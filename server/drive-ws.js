@@ -372,10 +372,14 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             pauseHoldTimer = setTimeout(() => {
               pauseHoldTimer = null;
               if (isPaused && activeFfmpeg === ffmpeg) {
-                try {
-                  ffmpeg.kill("SIGSTOP");
-                } catch {
-                  // Ignore
+                if (process.platform === "win32") {
+                  setPipesPaused(true);
+                } else {
+                  try {
+                    ffmpeg.kill("SIGSTOP");
+                  } catch {
+                    // Ignore
+                  }
                 }
               }
             }, 30);
@@ -511,18 +515,27 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
           clearTimeout(pauseHoldTimer);
           pauseHoldTimer = null;
         }
-        if (activeFfmpeg) {
+        if (process.platform === "win32") {
           try {
-            activeFfmpeg.kill("SIGSTOP");
+            activeFfmpeg?.stdout?.pause();
+            activeFfmpeg?.stdio?.[3]?.pause();
           } catch {
             // Ignore
           }
-        }
-        if (activeYtDlp) {
-          try {
-            activeYtDlp.kill("SIGSTOP");
-          } catch {
-            // Ignore
+        } else {
+          if (activeFfmpeg) {
+            try {
+              activeFfmpeg.kill("SIGSTOP");
+            } catch {
+              // Ignore
+            }
+          }
+          if (activeYtDlp) {
+            try {
+              activeYtDlp.kill("SIGSTOP");
+            } catch {
+              // Ignore
+            }
           }
         }
       } else if (msg.type === "resume") {
@@ -532,16 +545,25 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
           pauseHoldTimer = null;
         }
         if (activeFfmpeg) {
-          try {
-            activeFfmpeg.kill("SIGCONT");
-          } catch {
-            // Ignore
-          }
-          if (activeYtDlp) {
+          if (process.platform === "win32") {
             try {
-              activeYtDlp.kill("SIGCONT");
+              activeFfmpeg.stdout?.resume();
+              activeFfmpeg.stdio?.[3]?.resume();
             } catch {
               // Ignore
+            }
+          } else {
+            try {
+              activeFfmpeg.kill("SIGCONT");
+            } catch {
+              // Ignore
+            }
+            if (activeYtDlp) {
+              try {
+                activeYtDlp.kill("SIGCONT");
+              } catch {
+                // Ignore
+              }
             }
           }
         } else {

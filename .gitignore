@@ -45,6 +45,3 @@ nginx_temp/
 
 # Synced user state written by server/user-state.js (prod + dev)
 data/
-
-# Netlify redirect site: its own repo (github.com/tylerhu3/RedirectUrl), managed by scripts/tunnel.mjs
-redirect-site/
