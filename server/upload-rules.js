@@ -172,7 +172,7 @@ export function parseUploadRoute(pathname) {
   if (pathname === "/api/upload") return { action: "sessions" };
   if (!pathname.startsWith("/api/upload/")) return null;
   const rest = pathname.slice("/api/upload/".length).split("/");
-  if (rest.length === 1 && ["auth", "folders", "status"].includes(rest[0])) return { action: rest[0] };
+  if (rest.length === 1 && ["auth", "folders", "status", "logs"].includes(rest[0])) return { action: rest[0] };
   if (rest[0] === "session" && UPLOAD_ID_PATTERN.test(rest[1] || "")) {
     if (rest.length === 2) return { action: "session", id: rest[1] };
     if (rest.length === 3 && rest[2] === "complete") return { action: "complete", id: rest[1] };

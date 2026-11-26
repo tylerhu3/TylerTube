@@ -164,7 +164,7 @@ export default function App() {
       const authSuccess = searchParams.get("auth");
       const targetPage = searchParams.get("page");
 
-      if (targetPage && (targetPage === "youtube" || targetPage === "shorts")) {
+      if (targetPage && (targetPage === "youtube" || targetPage === "shorts" || targetPage === "upload")) {
         setCurrentPage(targetPage);
       }
 
@@ -186,6 +186,7 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     await logoutUser();
     setAuth((prev) => ({ ...prev, authenticated: false, user: null }));
+    setCurrentPage((prev) => (prev === "upload" ? "home" : prev));
   }, []);
 
   // Log this visit once per page load; refresh the list whenever the menu opens.
@@ -845,6 +846,7 @@ export default function App() {
           <div hidden={currentPage !== "upload"}>
             <UploadPage
               keyStorageKey={UPLOAD_KEY_STORAGE_KEY}
+              googleAuth={auth}
               onNavigateHome={() => setCurrentPage("home")}
             />
           </div>

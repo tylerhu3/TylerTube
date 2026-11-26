@@ -18,6 +18,7 @@ import {
   validateName
 } from "../server/upload-rules.js";
 import { createUploadStore } from "../server/upload-store.js";
+import { createUploadLog, publicUploadLogEntry } from "../server/upload-log.js";
 import { startDriveServer } from "../server/standalone.js";
 import { ipBucket } from "../server/upload.js";
 
@@ -124,10 +125,69 @@ test("parseUploadRoute", () => {
   assert.equal(parseUploadRoute("/api/state"), null);
   assert.deepEqual(parseUploadRoute("/api/upload"), { action: "sessions" });
   assert.deepEqual(parseUploadRoute("/api/upload/folders"), { action: "folders" });
+  assert.deepEqual(parseUploadRoute("/api/upload/logs"), { action: "logs" });
   const id = "a".repeat(32);
   assert.deepEqual(parseUploadRoute(`/api/upload/session/${id}`), { action: "session", id });
   assert.deepEqual(parseUploadRoute(`/api/upload/session/${id}/complete`), { action: "complete", id });
   assert.deepEqual(parseUploadRoute("/api/upload/session/../../x"), { action: "unknown" });
+});
+
+test("upload log: records who uploaded what, deduplicates by session id, persists, and strips IP", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tylertube-upload-log-"));
+  const logFile = path.join(dir, "upload-log.json");
+  let t = 1_700_000_000_000;
+  const log = createUploadLog(logFile, { now: () => t });
+
+  const first = log.record({
+    id: "1".repeat(32),
+    user: { id: "google-1", name: "Alice", email: "alice@example.com" },
+    path: "Course/Intro.mp4",
+    url: "/videos/Course/Intro.mp4",
+    kind: "video",
+    size: 1024,
+    ip: "203.0.113.5"
+  });
+  assert.equal(first.user.email, "alice@example.com");
+  assert.equal(first.path, "Course/Intro.mp4");
+  assert.equal(first.ip, "203.0.113.5");
+
+  // Duplicate session id (e.g. retried /complete) does not add a second entry.
+  t += 1000;
+  log.record({
+    id: "1".repeat(32),
+    user: { id: "google-1", name: "Alice", email: "alice@example.com" },
+    path: "Course/Intro.mp4",
+    url: "/videos/Course/Intro.mp4",
+    kind: "video",
+    size: 1024,
+    ip: "203.0.113.5"
+  });
+  assert.equal(log.list().length, 1);
+
+  t += 5000;
+  log.record({
+    id: "2".repeat(32),
+    user: { id: "google-2", name: "Bob", email: "bob@example.com" },
+    path: "Movies/Clip.mp4",
+    url: "/videos/Movies/Clip.mp4",
+    kind: "video",
+    size: 2048,
+    ip: "198.51.100.9"
+  });
+
+  // Reload from disk: newest first.
+  const reloaded = createUploadLog(logFile);
+  const entries = reloaded.list();
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].path, "Movies/Clip.mp4");
+  assert.equal(entries[0].user.name, "Bob");
+  assert.equal(entries[1].path, "Course/Intro.mp4");
+  assert.equal(entries[1].user.email, "alice@example.com");
+
+  const pub = publicUploadLogEntry(entries[0]);
+  assert.equal(pub.ip, undefined);
+  assert.equal(pub.user.email, "bob@example.com");
+  assert.equal(pub.path, "Movies/Clip.mp4");
 });
 
 // --- store ----------------------------------------------------------------------------------
@@ -328,28 +388,60 @@ test("store: cleanup removes expired sessions only", () => {
 async function withServer(fn, { key = KEY } = {}) {
   const dir = tmpLibrary();
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tylertube-state-"));
+  const uploadLogFile = path.join(stateDir, "upload-log.json");
   const drive = startDriveServer({
     port: 0,
     videosDir: dir,
     stateFile: path.join(stateDir, "state.json"),
     visitorsFile: path.join(stateDir, "visitors.json"),
+    authFile: path.join(stateDir, "auth.json"),
+    uploadLogFile,
     geolocate: null,
     getUploadKey: () => key,
     uploadReserveBytes: 0
   });
+  drive.authStore.saveUser({
+    id: "google-user-1",
+    name: "Tyler Tester",
+    email: "tyler@example.com"
+  });
+  const sessionId = drive.authStore.createSession("google-user-1");
+  const googleCookie = `tylertube_session=${sessionId}`;
   const port = await drive.ready;
   try {
-    await fn(`http://127.0.0.1:${port}`, dir);
+    await fn(`http://127.0.0.1:${port}`, dir, { googleCookie, uploadLogFile });
   } finally {
     await drive.close();
   }
 }
 
-const auth = { "X-Upload-Key": KEY };
+const keyHeader = { "X-Upload-Key": KEY };
+
+test("http: Google sign-in is required before upload key check", async () => {
+  await withServer(async (base) => {
+    // Even with a valid upload key, signed-out requests are rejected with AUTH_REQUIRED.
+    let res = await fetch(`${base}/api/upload/auth`, { headers: keyHeader });
+    assert.equal(res.status, 401);
+    assert.equal((await res.json()).code, "AUTH_REQUIRED");
+
+    res = await fetch(`${base}/api/upload/folders`, { headers: keyHeader });
+    assert.equal(res.status, 401);
+    assert.equal((await res.json()).code, "AUTH_REQUIRED");
+
+    res = await fetch(`${base}/api/upload`, {
+      method: "POST",
+      headers: { ...keyHeader, "Content-Type": "application/json" },
+      body: JSON.stringify({ folder: "Course", name: "a.vtt", size: 6 })
+    });
+    assert.equal(res.status, 401);
+    assert.equal((await res.json()).code, "AUTH_REQUIRED");
+  });
+});
 
 test("http: key is required, wrong keys are rate-limited", async () => {
-  await withServer(async (base) => {
-    let res = await fetch(`${base}/api/upload/auth`);
+  await withServer(async (base, _dir, { googleCookie }) => {
+    const auth = { ...keyHeader, Cookie: googleCookie };
+    let res = await fetch(`${base}/api/upload/auth`, { headers: { Cookie: googleCookie } });
     assert.equal(res.status, 401);
     assert.equal((await res.json()).code, "BAD_KEY");
 
@@ -360,7 +452,9 @@ test("http: key is required, wrong keys are rate-limited", async () => {
     assert.equal(info.maxFolderDepth, 3);
 
     for (let i = 0; i < 10; i += 1) {
-      res = await fetch(`${base}/api/upload/auth`, { headers: { "X-Upload-Key": "wrong-key-xxxxxx" } });
+      res = await fetch(`${base}/api/upload/auth`, {
+        headers: { "X-Upload-Key": "wrong-key-xxxxxx", Cookie: googleCookie }
+      });
       assert.equal(res.status, 401);
     }
     res = await fetch(`${base}/api/upload/auth`, { headers: auth });
@@ -370,15 +464,16 @@ test("http: key is required, wrong keys are rate-limited", async () => {
 });
 
 test("http: uploads are off without a configured key", async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/upload/auth`, { headers: auth });
+  await withServer(async (base, _dir, { googleCookie }) => {
+    const res = await fetch(`${base}/api/upload/auth`, { headers: { ...keyHeader, Cookie: googleCookie } });
     assert.equal(res.status, 503);
     assert.equal((await res.json()).code, "UPLOADS_DISABLED");
   }, { key: "" });
 });
 
-test("http: create folder, upload a subtitle in chunks, list it", async () => {
-  await withServer(async (base, dir) => {
+test("http: create folder, upload a subtitle in chunks, list it, and log uploader", async () => {
+  await withServer(async (base, dir, { googleCookie, uploadLogFile }) => {
+    const auth = { ...keyHeader, Cookie: googleCookie };
     let res = await fetch(`${base}/api/upload/folders`, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
@@ -418,11 +513,37 @@ test("http: create folder, upload a subtitle in chunks, list it", async () => {
     assert.equal(res.status, 200);
     assert.equal((await res.json()).path, "New/Sub/Clip.vtt");
     assert.deepEqual(fs.readFileSync(path.join(dir, "New", "Sub", "Clip.vtt")), body);
+
+    // Retrying complete should not create duplicate log entries.
+    res = await fetch(`${base}/api/upload/session/${id}/complete`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: "{}"
+    });
+    assert.equal(res.status, 200);
+
+    // Verify audit log persisted on disk and exposed via GET /api/upload/logs.
+    const savedLog = JSON.parse(fs.readFileSync(uploadLogFile, "utf8"));
+    assert.equal(savedLog.entries.length, 1);
+    assert.equal(savedLog.entries[0].path, "New/Sub/Clip.vtt");
+    assert.equal(savedLog.entries[0].size, body.length);
+    assert.equal(savedLog.entries[0].user.id, "google-user-1");
+    assert.equal(savedLog.entries[0].user.name, "Tyler Tester");
+    assert.equal(savedLog.entries[0].user.email, "tyler@example.com");
+
+    res = await fetch(`${base}/api/upload/logs`, { headers: auth });
+    assert.equal(res.status, 200);
+    const { logs } = await res.json();
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].path, "New/Sub/Clip.vtt");
+    assert.equal(logs[0].user.email, "tyler@example.com");
+    assert.equal(logs[0].ip, undefined);
   });
 });
 
 test("http: errors are JSON with a code", async () => {
-  await withServer(async (base) => {
+  await withServer(async (base, _dir, { googleCookie }) => {
+    const auth = { ...keyHeader, Cookie: googleCookie };
     let res = await fetch(`${base}/api/upload/session/${"0".repeat(32)}`, { headers: auth });
     assert.equal(res.status, 404);
     assert.equal((await res.json()).code, "SESSION_NOT_FOUND");

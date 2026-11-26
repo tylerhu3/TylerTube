@@ -104,6 +104,7 @@ export function createUploadClient({
     try {
       res = await fetchImpl(`${base}${path}`, {
         method,
+        credentials: "same-origin",
         headers: {
           "X-Upload-Key": getKey() || "",
           ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -173,6 +174,7 @@ export function createUploadClient({
     listFolders: () => request("GET", "/folders"),
     createFolder: (path) => request("POST", "/folders", { json: { path } }),
     catalogStatus: () => request("GET", "/status"),
+    listLogs: () => request("GET", "/logs"),
     cancel: (id) => request("DELETE", sessionPath(id)),
 
     // Uploads one File into `folder` ("Course/Section", "" = root) under `name` (default:

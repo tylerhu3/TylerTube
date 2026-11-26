@@ -1,24 +1,27 @@
 // Upload API: resumable, chunked uploads into public/videos/ plus folder creation. Chunks keep
 // each request under Cloudflare's ~100 MB request limit (the site is served through a tunnel).
 //
-//   GET    /api/upload/auth                  → check the key; limits and free space
+//   GET    /api/upload/auth                  → check Google sign-in + key; limits and free space
 //   GET    /api/upload/folders               → { folders: ["Course", "Course/Section", …] }
 //   POST   /api/upload/folders  {path}       → create (with parents)
 //   POST   /api/upload          {folder,name,size} → start or resume → { id, offset, … }
 //   GET    /api/upload/session/:id           → { offset, size, … }
 //   PUT    /api/upload/session/:id?offset=N  → append raw bytes → { offset }
-//   POST   /api/upload/session/:id/complete  {name?} → validate + move into place
+//   POST   /api/upload/session/:id/complete  {name?} → validate + move into place + audit log
 //   DELETE /api/upload/session/:id           → cancel
 //   GET    /api/upload/status                → { pendingRebuild } (is the new catalog live yet?)
+//   GET    /api/upload/logs                  → { logs: [...] } recent upload audit log
 //
-// Every request needs the X-Upload-Key header matching TYLERTUBE_UPLOAD_KEY (or the file
-// data/upload-key). With no key configured, uploads are off. Errors are always JSON
-// { error, code, … }. Disk side: server/upload-store.js; pure rules: server/upload-rules.js.
+// Every request requires a signed-in Google user session AND the X-Upload-Key header matching
+// TYLERTUBE_UPLOAD_KEY (or the file data/upload-key). With no key configured, uploads are off.
+// Errors are always JSON { error, code, … }. Disk side: server/upload-store.js; pure rules:
+// server/upload-rules.js; audit log: server/upload-log.js.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { clientIp, readJSONBody, sendJSON } from "./http-utils.js";
-import { MAX_CHUNK_BYTES, MAX_FOLDER_DEPTH, UploadError, parseUploadRoute } from "./upload-rules.js";
+import { MAX_CHUNK_BYTES, MAX_FOLDER_DEPTH, UploadError, formatBytes, parseUploadRoute } from "./upload-rules.js";
+import { publicUploadLogEntry } from "./upload-log.js";
 import { computeVideoSignature, readRecordedSignature } from "./video-signature.js";
 
 export const DEFAULT_UPLOAD_KEY_FILE = fileURLToPath(new URL("../data/upload-key", import.meta.url));
@@ -73,9 +76,12 @@ export function signatureCatalogStatus(videosDir, { cacheMs = 10_000 } = {}) {
 
 export function createUploadHandler(store, {
   getKey = defaultUploadKey(),
+  getUser = () => null,
+  uploadLog = null,
   catalogStatus = () => ({ pendingRebuild: false, autoRebuild: true }),
   now = () => Date.now(),
-  cleanupIntervalMs = 60 * 60 * 1000
+  cleanupIntervalMs = 60 * 60 * 1000,
+  log = (msg) => console.log(`[upload] ${msg}`)
 } = {}) {
   const failures = new Map(); // ip → { count, since }
 
@@ -114,6 +120,10 @@ export function createUploadHandler(store, {
     if (expected.length < MIN_KEY_LENGTH) {
       throw new UploadError(503, "UPLOADS_DISABLED", `The server's upload key is too short (min ${MIN_KEY_LENGTH} characters), so uploads are off.`);
     }
+    const user = getUser(req);
+    if (!user || !user.id) {
+      throw new UploadError(401, "AUTH_REQUIRED", "Sign in with Google to upload files.");
+    }
     const ip = ipBucket(clientIp(req));
     const entry = failures.get(ip);
     if (entry && now() - entry.since > FAILED_WINDOW_MS) failures.delete(ip);
@@ -134,13 +144,14 @@ export function createUploadHandler(store, {
       throw new UploadError(401, "BAD_KEY", given ? "Wrong upload key." : "An upload key is required.");
     }
     failures.delete(ip);
+    return user;
   }
 
   function methodNotAllowed(allowed) {
     return new UploadError(405, "METHOD_NOT_ALLOWED", `Use ${allowed.join(" or ")} here.`, { allow: allowed });
   }
 
-  async function route(req, res, { action, id }, query) {
+  async function route(req, res, { action, id }, query, user) {
     const method = req.method;
     switch (action) {
       case "auth":
@@ -164,6 +175,11 @@ export function createUploadHandler(store, {
       case "status":
         if (method !== "GET") throw methodNotAllowed(["GET"]);
         return sendJSON(res, 200, catalogStatus());
+      case "logs":
+        if (method !== "GET") throw methodNotAllowed(["GET"]);
+        return sendJSON(res, 200, {
+          logs: uploadLog ? uploadLog.list().map(publicUploadLogEntry) : []
+        });
       case "sessions": {
         if (method !== "POST") throw methodNotAllowed(["POST"]);
         const body = await readJSONBody(req, 16 * 1024);
@@ -186,7 +202,21 @@ export function createUploadHandler(store, {
       case "complete": {
         if (method !== "POST") throw methodNotAllowed(["POST"]);
         const body = await readJSONBody(req, 16 * 1024);
-        return sendJSON(res, 200, await store.complete(id, body));
+        const result = await store.complete(id, body);
+        if (uploadLog) {
+          uploadLog.record({
+            id,
+            user,
+            path: result.path,
+            url: result.url,
+            kind: result.kind,
+            size: result.size,
+            ip: clientIp(req)
+          });
+        }
+        const who = user.email ? `${user.name} <${user.email}>` : (user.name || user.id);
+        log(`uploaded ${result.path} (${formatBytes(result.size)}) by ${who}`);
+        return sendJSON(res, 200, result);
       }
       default:
         throw new UploadError(404, "NOT_FOUND", "Unknown upload endpoint.");
@@ -201,8 +231,8 @@ export function createUploadHandler(store, {
       return false;
     }
     try {
-      authorize(req);
-      await route(req, res, parsed, new URLSearchParams(search));
+      const user = authorize(req);
+      await route(req, res, parsed, new URLSearchParams(search), user);
     } catch (err) {
       if (res.headersSent) {
         res.destroy();

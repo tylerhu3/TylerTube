@@ -470,6 +470,7 @@ export function createUploadStore({
           path: relSegments.join("/"),
           url: `/videos/${encodeUrlPath(relSegments)}`,
           kind: meta.kind,
+          size: meta.size,
           ...(warning ? { warning } : {})
         };
         try {

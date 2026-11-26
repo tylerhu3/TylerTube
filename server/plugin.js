@@ -11,6 +11,7 @@ import { createVisitorStore, createVisitorsHandler, defaultGeolocate } from "./v
 import { computeVideoSignature, recordSignature } from "./video-signature.js";
 import { createUploadHandler } from "./upload.js";
 import { createUploadStore } from "./upload-store.js";
+import { createUploadLog } from "./upload-log.js";
 import { createYouTubeHandler } from "./youtube.js";
 import { createAuthStore, createAuthHandler } from "./auth.js";
 
@@ -35,8 +36,15 @@ function devVisitorsHandler() {
 
 // Same library and key as production (dev uploads land in the real public/videos/). Vite's
 // watcher reloads the catalog itself, so the catalog is always "live" here.
-function devUploadHandler(videosDir) {
-  return createUploadHandler(createUploadStore({ videosDir }));
+function devUploadHandler(videosDir, authStore) {
+  const logFile = path.resolve(process.cwd(), "data/upload-log.dev.json");
+  return createUploadHandler(createUploadStore({ videosDir }), {
+    getUser: (req) => {
+      const userId = authStore?.getUserIdFromRequest(req);
+      return userId ? authStore.getUser(userId) : null;
+    },
+    uploadLog: createUploadLog(logFile)
+  });
 }
 
 export function videoCatalogPlugin() {
@@ -111,7 +119,7 @@ export function videoCatalogPlugin() {
       server.middlewares.use(authHandler);
       server.middlewares.use(devUserStateHandler(authStore));
       server.middlewares.use(devVisitorsHandler());
-      server.middlewares.use(devUploadHandler(videosDir));
+      server.middlewares.use(devUploadHandler(videosDir, authStore));
       server.middlewares.use(createYouTubeHandler({ authStore }));
       attachDriveWebSocketServer(server.httpServer, videosDir);
       server.watcher.add(videosDir);
@@ -143,7 +151,7 @@ export function videoCatalogPlugin() {
       server.middlewares.use(authHandler);
       server.middlewares.use(devUserStateHandler(authStore));
       server.middlewares.use(devVisitorsHandler());
-      server.middlewares.use(devUploadHandler(videosDir));
+      server.middlewares.use(devUploadHandler(videosDir, authStore));
       server.middlewares.use(createYouTubeHandler({ authStore }));
       attachDriveWebSocketServer(server.httpServer, videosDir);
     }

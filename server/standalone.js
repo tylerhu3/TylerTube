@@ -13,6 +13,7 @@ import { createUserStateHandler, createUserStateStore } from "./user-state.js";
 import { createVisitorStore, createVisitorsHandler, defaultGeolocate } from "./visitors.js";
 import { createUploadHandler, defaultUploadKey, signatureCatalogStatus } from "./upload.js";
 import { createUploadStore } from "./upload-store.js";
+import { DEFAULT_UPLOAD_LOG_FILE, createUploadLog } from "./upload-log.js";
 import { createYouTubeHandler } from "./youtube.js";
 import { createAuthStore, createAuthHandler } from "./auth.js";
 
@@ -28,6 +29,8 @@ export const DEFAULT_STATE_FILE = fileURLToPath(new URL("../data/user-state.json
 export const DEFAULT_VISITORS_FILE = fileURLToPath(new URL("../data/visitors.json", import.meta.url));
 // Gitignored. Override with TYLERTUBE_AUTH_FILE.
 export const DEFAULT_AUTH_FILE = fileURLToPath(new URL("../data/auth-tokens.json", import.meta.url));
+// Gitignored. Override with TYLERTUBE_UPLOAD_LOG_FILE.
+export { DEFAULT_UPLOAD_LOG_FILE };
 
 // Optional GB override from the environment; undefined → the store's default (5 GB).
 function envGigabytes(name) {
@@ -42,6 +45,7 @@ export function startDriveServer({
   stateFile = process.env.TYLERTUBE_STATE_FILE || DEFAULT_STATE_FILE,
   visitorsFile = process.env.TYLERTUBE_VISITORS_FILE || DEFAULT_VISITORS_FILE,
   authFile = process.env.TYLERTUBE_AUTH_FILE || DEFAULT_AUTH_FILE,
+  uploadLogFile = process.env.TYLERTUBE_UPLOAD_LOG_FILE || DEFAULT_UPLOAD_LOG_FILE,
   geolocate = defaultGeolocate(),
   getUploadKey = defaultUploadKey(),
   uploadReserveBytes = envGigabytes("TYLERTUBE_UPLOAD_RESERVE_GB")
@@ -53,8 +57,14 @@ export function startDriveServer({
   });
   const handleVisitors = createVisitorsHandler(createVisitorStore(visitorsFile, { geolocate }));
   const uploadStore = createUploadStore({ videosDir, reserveBytes: uploadReserveBytes });
+  const uploadLog = createUploadLog(uploadLogFile);
   const handleUpload = createUploadHandler(uploadStore, {
     getKey: getUploadKey,
+    getUser: (req) => {
+      const userId = authStore.getUserIdFromRequest(req);
+      return userId ? authStore.getUser(userId) : null;
+    },
+    uploadLog,
     catalogStatus: signatureCatalogStatus(videosDir)
   });
   const handleYouTube = createYouTubeHandler({ authStore });
@@ -118,7 +128,7 @@ export function startDriveServer({
     });
   });
 
-  return { server, wss, ready, close };
+  return { server, wss, authStore, uploadLog, ready, close };
 }
 
 function isMainModule() {

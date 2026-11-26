@@ -368,7 +368,8 @@ export function createAuthHandler(store) {
           isSecure ? "Secure" : ""
         ].filter(Boolean).join("; ");
 
-        const destinationPage = state === "shorts" ? "shorts" : "youtube";
+        const allowedPages = new Set(["home", "history", "favorites", "youtube", "shorts", "upload"]);
+        const destinationPage = allowedPages.has(state) ? state : "youtube";
         res.writeHead(302, {
           "Set-Cookie": cookieHeader,
           Location: `/?page=${destinationPage}&auth=success`

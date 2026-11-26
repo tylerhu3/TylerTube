@@ -3,6 +3,7 @@ import FolderPicker from "./upload/FolderPicker";
 import UploadQueue from "./upload/UploadQueue";
 import { readString, removeKey, writeString } from "../lib/storage";
 import { setUploadQueueActive } from "../lib/uploadActivity";
+import { getGoogleLoginUrl } from "../lib/auth";
 import {
   ACCEPTED_EXTENSIONS,
   bytesPerSecond,
@@ -24,12 +25,22 @@ const FINAL_CODES = new Set([
   "NAME_TAKEN",
   "CANCELED"
 ]);
-const AUTH_CODES = new Set(["BAD_KEY", "UPLOADS_DISABLED", "TOO_MANY_ATTEMPTS"]);
+const AUTH_CODES = new Set(["AUTH_REQUIRED", "BAD_KEY", "UPLOADS_DISABLED", "TOO_MANY_ATTEMPTS"]);
 
 let nextKey = 1;
 
+function formatLogTime(ts) {
+  if (!ts) return "";
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return "";
+  }
+}
+
 // keyStorageKey: localStorage key for the upload key (defined in App.jsx; not synced).
-export default function UploadPage({ keyStorageKey, onNavigateHome }) {
+export default function UploadPage({ keyStorageKey, googleAuth = null, onNavigateHome }) {
+  const isSignedIn = Boolean(googleAuth?.authenticated);
   const [uploadKey, setUploadKey] = useState(() => readString(keyStorageKey, ""));
   const [keyDraft, setKeyDraft] = useState("");
   const [auth, setAuth] = useState({ state: uploadKey ? "checking" : "locked", info: null, error: "" });
@@ -38,6 +49,7 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
   const [foldersError, setFoldersError] = useState("");
   const [selectedFolder, setSelectedFolder] = useState("");
   const [items, setItems] = useState([]);
+  const [uploadLogs, setUploadLogs] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -93,6 +105,15 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
     }
   }, [client, lockWith]);
 
+  const loadLogs = useCallback(async () => {
+    try {
+      const { logs } = await client.listLogs();
+      if (Array.isArray(logs)) setUploadLogs(logs);
+    } catch {
+      // Best-effort log display.
+    }
+  }, [client]);
+
   const checkKey = useCallback(async () => {
     setAuth((prev) => ({ ...prev, state: "checking", error: "" }));
     try {
@@ -100,15 +121,19 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
       writeString(keyStorageKey, keyRef.current); // saved only once the server accepts it
       setAuth({ state: "ok", info, error: "" });
       loadFolders();
+      loadLogs();
     } catch (err) {
       setAuth({ state: AUTH_CODES.has(err.code) ? "locked" : "error", info: null, error: err.message });
     }
-  }, [client, loadFolders, keyStorageKey]);
+  }, [client, loadFolders, loadLogs, keyStorageKey]);
 
   useEffect(() => {
-    if (uploadKey) checkKey();
-    // Only on mount; later checks are explicit.
-  }, []);
+    if (isSignedIn && uploadKey) {
+      checkKey();
+    } else if (!isSignedIn) {
+      setAuth({ state: "locked", info: null, error: "" });
+    }
+  }, [isSignedIn]);
 
   const handleUnlock = (e) => {
     e.preventDefault();
@@ -230,6 +255,7 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
           kind: result.kind,
           finishedAt: Date.now()
         });
+        loadLogs();
       } catch (err) {
         if (err.code === "CANCELED") {
           updateItem(item.key, { status: "canceled", retryNote: "", sessionId: null });
@@ -257,15 +283,15 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
         setItems((prev) => [...prev]);
       }
     },
-    [client, updateItem, lockWith, loadFolders, discardOnServer]
+    [client, updateItem, lockWith, loadFolders, loadLogs, discardOnServer]
   );
 
   // One upload at a time, in queue order.
   useEffect(() => {
-    if (activeRef.current || auth.state !== "ok") return;
+    if (activeRef.current || !isSignedIn || auth.state !== "ok") return;
     const next = items.find((it) => it.status === "queued");
     if (next) runUpload(next);
-  }, [items, auth.state, runUpload]);
+  }, [items, isSignedIn, auth.state, runUpload]);
 
   const handleCancel = useCallback(
     (key) => {
@@ -299,6 +325,7 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
       try {
         const result = await client.finishAs(item.sessionId, suggestion);
         updateItem(key, { status: "done", sessionId: null, warning: result.warning || "", kind: result.kind, finishedAt: Date.now() });
+        loadLogs();
       } catch (err) {
         updateItem(key, {
           status: "error",
@@ -307,7 +334,7 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
         });
       }
     },
-    [client, updateItem]
+    [client, updateItem, loadLogs]
   );
 
   const handleRemove = useCallback(
@@ -386,6 +413,36 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
       </p>
     </div>
   );
+
+  if (!isSignedIn) {
+    return (
+      <div className="subpage-container upload-page">
+        {header}
+        <div className="empty-state-card upload-lock-card">
+          <div className="empty-state-icon" aria-hidden="true">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="11" width="16" height="10" rx="2" />
+              <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+            </svg>
+          </div>
+          <h3>Sign in with Google to upload</h3>
+          <p>
+            Uploading videos is only available when you are signed in with your Google account.
+          </p>
+          <a href={getGoogleLoginUrl("upload")} className="youtube-google-login-btn upload-google-login-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+            </svg>
+            Sign in with Google
+          </a>
+          <button type="button" className="upload-link-btn" onClick={onNavigateHome}>Back to library</button>
+        </div>
+      </div>
+    );
+  }
 
   if (auth.state !== "ok") {
     return (
@@ -524,6 +581,38 @@ export default function UploadPage({ keyStorageKey, onNavigateHome }) {
             onClearFinished={handleClearFinished}
             onReload={() => window.location.reload()}
           />
+
+          {uploadLogs.length > 0 && (
+            <section className="upload-panel upload-log-panel" aria-label="Upload log">
+              <div className="upload-panel-head">
+                <h3>Recent uploads</h3>
+                <button type="button" className="upload-link-btn" onClick={loadLogs}>
+                  Refresh
+                </button>
+              </div>
+              <ul className="upload-log-list">
+                {uploadLogs.slice(0, 20).map((entry) => {
+                  const who = entry.user?.email
+                    ? `${entry.user.name || "Unknown"} (${entry.user.email})`
+                    : (entry.user?.name || entry.user?.id || "Unknown user");
+                  return (
+                    <li key={entry.id || `${entry.path}-${entry.uploadedAt}`} className="upload-log-item">
+                      <div className="upload-log-main">
+                        <span className="upload-log-path" title={entry.path}>{entry.path}</span>
+                        {entry.size > 0 && (
+                          <span className="upload-log-size">{formatBytes(entry.size)}</span>
+                        )}
+                      </div>
+                      <div className="upload-log-meta">
+                        <span>Uploaded by <strong>{who}</strong></span>
+                        {entry.uploadedAt && <span> · {formatLogTime(entry.uploadedAt)}</span>}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
         </div>
       </div>
     </div>

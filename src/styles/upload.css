@@ -231,6 +231,58 @@
     gap: 0.75rem;
 }
 
+.upload-google-login-btn {
+    width: auto;
+    padding: 0.6rem 1.2rem;
+}
+
+/* Upload audit log */
+.upload-log-list {
+    list-style: none;
+    margin: 0.4rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.upload-log-item {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.55rem 0.75rem;
+    background: var(--bg-primary);
+}
+
+.upload-log-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.upload-log-path {
+    color: var(--text-main);
+    font-weight: 600;
+    font-size: 0.86rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.upload-log-size {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: 0.76rem;
+}
+
+.upload-log-meta {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-top: 0.2rem;
+    overflow-wrap: anywhere;
+}
+
 /* Drop zone */
 .upload-dropzone {
     border: 2px dashed var(--input-border);
