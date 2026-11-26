@@ -11,12 +11,10 @@ export default function Navbar({
   onToggleTheater,
   isSidePlayer,
   onToggleSidePlayer,
-  playerMode = "standard",
-  onTogglePlayerMode,
   viewMode = "desktop",
   theme = "light",
   onToggleTheme,
-  colorTheme = "lightblue",
+  colorTheme = "pink",
   onColorThemeChange,
   onToggleMenu,
   currentPage = "home",
@@ -176,37 +174,6 @@ export default function Navbar({
                 <circle cx="11" cy="11" r="8" />
                 <line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
-            </button>
-          )}
-
-          {onTogglePlayerMode && (
-            <button
-              type="button"
-              className="btn-secondary player-mode-nav-btn"
-              onClick={onTogglePlayerMode}
-              title={
-                playerMode === "webcodecs"
-                  ? "Switch to Standard Video Player (D)"
-                  : "Switch to WebCodecs Video Player (D)"
-              }
-            >
-              {isMobileMode
-                ? playerMode === "webcodecs"
-                  ? "🎬"
-                  : "⚡"
-                : (
-                  <>
-                    {playerMode === "webcodecs" ? "🎬" : "⚡"}
-                    <span className="nav-btn-label">
-                      {playerMode === "webcodecs"
-                        ? "Use Standard Player"
-                        : "Use WebCodecs Player"}
-                    </span>
-                    <span className="nav-btn-label-short">
-                      {playerMode === "webcodecs" ? "Standard" : "WebCodecs"}
-                    </span>
-                  </>
-                )}
             </button>
           )}
 

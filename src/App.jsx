@@ -13,7 +13,6 @@ import { COLOR_THEMES } from "./data/themeColors";
 import { readJSON, readString, writeString, writeJSON } from "./lib/storage";
 import { createSyncStore } from "./lib/sync";
 import { fetchVisitors, recordVisit } from "./lib/visitors";
-import { isWebCodecsSupported } from "./components/webcodecs/protocol";
 import { fetchAuthStatus, logoutUser } from "./lib/auth";
 
 const STORAGE_KEY = "tylertube_watch_progress";
@@ -115,22 +114,22 @@ export default function App() {
   });
   const [colorTheme, setColorTheme] = useState(() => {
     try {
-      const migrated = localStorage.getItem("tylertube_theme_migrated_v2");
+      const migrated = localStorage.getItem("tylertube_theme_migrated_v3");
       if (!migrated) {
-        localStorage.setItem("tylertube_theme_migrated_v2", "true");
+        localStorage.setItem("tylertube_theme_migrated_v3", "true");
         const old = localStorage.getItem(COLOR_THEME_STORAGE_KEY);
-        if (!old || old === "red") {
-          localStorage.setItem(COLOR_THEME_STORAGE_KEY, "lightblue");
-          document.documentElement.setAttribute("data-color-theme", "lightblue");
-          return "lightblue";
+        if (!old || old === "red" || old === "lightblue") {
+          localStorage.setItem(COLOR_THEME_STORAGE_KEY, "pink");
+          document.documentElement.setAttribute("data-color-theme", "pink");
+          return "pink";
         }
       }
-      const saved = localStorage.getItem(COLOR_THEME_STORAGE_KEY) || "lightblue";
+      const saved = localStorage.getItem(COLOR_THEME_STORAGE_KEY) || "pink";
       document.documentElement.setAttribute("data-color-theme", saved);
       return saved;
     } catch {
-      document.documentElement.setAttribute("data-color-theme", "lightblue");
-      return "lightblue";
+      document.documentElement.setAttribute("data-color-theme", "pink");
+      return "pink";
     }
   });
   const [watchProgress, setWatchProgress] = useState(() =>
@@ -216,10 +215,6 @@ export default function App() {
   const [selectedSection, setSelectedSection] = useState("ALL");
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isSidePlayer, setIsSidePlayer] = useState(false);
-  // playerMode: "webcodecs" (default where VideoDecoder exists) | "standard" (Plyr).
-  const [playerMode, setPlayerMode] = useState(() =>
-    isWebCodecsSupported() ? "webcodecs" : "standard"
-  );
   const [viewMode, setViewMode] = useState(() => {
     const initial = detectInitialViewMode();
     if (typeof document !== "undefined") {
@@ -385,7 +380,6 @@ export default function App() {
     (video) => {
       setActiveCustomVideo(video);
       setCurrentVideoId(video.id);
-      setPlayerMode("webcodecs");
       window.scrollTo({ top: 0, behavior: "smooth" });
     },
     []
@@ -650,14 +644,7 @@ export default function App() {
     syncStore.touch("theme");
   }, []);
 
-  // D / player buttons toggle standard ↔ webcodecs (webcodecs only where supported).
-  const togglePlayerMode = useCallback(() => {
-    setPlayerMode((prev) =>
-      prev === "standard" && isWebCodecsSupported() ? "webcodecs" : "standard"
-    );
-  }, []);
-
-  // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player, 'M' for Mobile/Desktop View, 'D' for Standard/WebCodecs Player when not typing in inputs
+  // Keyboard shortcuts: 'T' for Theater Mode, 'S' for Side Player, 'M' for Mobile/Desktop View when not typing in inputs
   useEffect(() => {
     const handleKeyDown = (e) => {
       const tag = document.activeElement?.tagName?.toLowerCase();
@@ -670,13 +657,11 @@ export default function App() {
         toggleSidePlayer();
       } else if (key === "m") {
         toggleViewMode();
-      } else if (key === "d") {
-        togglePlayerMode();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleTheaterMode, toggleSidePlayer, toggleViewMode, togglePlayerMode, currentPage, viewMode]);
+  }, [toggleTheaterMode, toggleSidePlayer, toggleViewMode, currentPage, viewMode]);
 
   const isPlayerHidden =
     currentPage !== "home" &&
@@ -692,8 +677,6 @@ export default function App() {
         onToggleTheater={toggleTheaterMode}
         isSidePlayer={isSidePlayer}
         onToggleSidePlayer={toggleSidePlayer}
-        playerMode={playerMode}
-        onTogglePlayerMode={togglePlayerMode}
         viewMode={viewMode}
         theme={theme}
         onToggleTheme={toggleTheme}
@@ -768,8 +751,6 @@ export default function App() {
           sidePlayerPrefs={sidePlayerPrefs}
           onUpdateSidePlayerPrefs={updateSidePlayerPrefs}
           viewMode={viewMode}
-          playerMode={playerMode}
-          onTogglePlayerMode={togglePlayerMode}
           onToggleTheater={toggleTheaterMode}
           onClose={activeCustomVideo ? () => setActiveCustomVideo(null) : undefined}
         />

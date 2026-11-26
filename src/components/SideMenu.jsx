@@ -14,7 +14,7 @@ export default function SideMenu({
   viewMode = "desktop",
   onViewModeChange,
   theme = "light",
-  colorTheme = "lightblue",
+  colorTheme = "pink",
   onColorThemeChange,
   totalVideosCount = 0,
   historyCount = 0,

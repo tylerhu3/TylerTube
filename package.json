@@ -15,7 +15,6 @@
     "tunnel": "node scripts/tunnel.mjs"
   },
   "dependencies": {
-    "plyr": "^3.7.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "ws": "^8.22.1"

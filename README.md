@@ -1,13 +1,13 @@
 # TylerTube (React + Vite + Nginx)
 
-A self-hosted video streaming web application built with **React**, **Vite**, **Plyr.io**, and **Nginx** on macOS (Apple Silicon). Features HTTP byte-range MP4 streaming, zero-copy file transfers, automatic watch-progress resume (`localStorage`), and a dark-themed single-page interface.
+A self-hosted video streaming web application built with **React**, **Vite**, **WebCodecs**, and **Nginx** on macOS (Apple Silicon). Features ffmpeg-backed WebCodecs canvas streaming, zero-copy file transfers, automatic watch-progress resume (`localStorage`), and a customizable single-page interface.
 
 ## Features
 
 - **React Component Architecture:** Modular `<Navbar />`, `<SideMenu />`, `<VideoPlayer />`, `<WebCodecsPlayer />`, `<VideoGrid />`, `<HistoryPage />`, `<FavoritesPage />`, `<YouTubePage />`, and `<ShortsPage />` components with automatic watch-progress persistence, course/section folder filters, and visual progress bars on video cards.
 - **YouTube & YouTube Shorts WebCodecs Streaming Portals:** Dedicated in-app portals to search YouTube videos and YouTube Shorts (vertical 9:16 cards) or paste any video/shorts URL (`youtube.com/watch?v=...`, `youtube.com/shorts/...`, `youtu.be/...`). Backed by `server/youtube.js` (`yt-dlp`), streams are piped directly into `ffmpeg` and packetized over WebSocket into TylerTube's canvas WebCodecs engine (`VideoDecoder` + `AudioContext`), bypassing Tesla browser driving pause restrictions.
 - **Automatic Subdirectory, Subtitle & Thumbnail Discovery:** Custom Vite plugin (`videoCatalogPlugin` in `server/plugin.js`) recursively scans `public/videos/` (and any nested course/section folders), naturally sorts numbered lessons, URL-encodes special characters (`#`, `&`, spaces), automatically pairs matching `.srt`/`.vtt` subtitle files, and generates/serves `.jpg` video thumbnails in `public/thumbnails/` via `ffmpeg`.
-- **Safe Plyr.io React Integration:** Imperative `<video>` mounting via React `useRef` so Plyr's DOM wrapper never conflicts with React re-renders.
+- **WebCodecs Canvas Player:** Streams H.264 video + PCM audio over WebSocket into a `VideoDecoder` canvas and `AudioContext`, supporting quality/FPS/speed/sync controls and bypassing Tesla browser driving pause restrictions.
 - **Zero-Copy Video Build Pipeline:** Vite builds the React UI into `dist/` (`copyPublicDir: false`) while Nginx serves `/videos/` directly from `public/videos/`, avoiding duplicating multi-gigabyte video files during builds.
 
 ## Project Structure
@@ -57,11 +57,11 @@ TylerTube/
     │   ├── videos.js           # Video catalog (from virtual:video-library)
     │   └── themeColors.js      # Accent color themes
     └── components/
-        ├── Navbar.jsx          # Search, theater/side-player/player-mode/theme toggles
+        ├── Navbar.jsx          # Search, theater/side-player/theme toggles
         ├── SideMenu.jsx        # Hamburger drawer: navigation, visitors, color themes, version
         ├── VideoGrid.jsx       # Library grid with watch-progress bars
-        ├── VideoPlayer.jsx     # Plyr player; switches to the WebCodecs player
-        ├── WebCodecsPlayer.jsx # WebCodecs canvas player (default; works while driving)
+        ├── VideoPlayer.jsx     # Player wrapper (WebCodecs player, floating side player, controls)
+        ├── WebCodecsPlayer.jsx # WebCodecs canvas player (works while driving)
         ├── webcodecs/          # WebCodecs engine, wire protocol, scheduler, player chrome
         ├── HistoryPage.jsx     # Watch history
         ├── FavoritesPage.jsx   # Favorites
@@ -102,7 +102,7 @@ section folders (up to 3 levels deep).
 - **Safety checks:** names with `/ \ :`, a leading dot or control characters are refused;
   existing files are never overwritten (you're offered `Name (2).mp4` instead); every video is
   checked with `ffprobe` and discarded if it isn't one (non-H.264/AAC files are kept with a
-  warning, since only the WebCodecs player plays them); and the server keeps 5 GB free
+  warning, since they're transcoded on the fly by WebCodecs); and the server keeps 5 GB free
   (`TYLERTUBE_UPLOAD_RESERVE_GB` to change). Max file size is 50 GB.
 - **When it shows up:** in production the tunnel keeper rebuilds about a minute after the
   folder stops changing, and the queue switches to **Live** once that's done. In dev it's live
@@ -186,7 +186,7 @@ brew services restart nginx
 
 ### 4. Run the Stream Server (WebCodecs player)
 
-The WebCodecs player (the default) streams over a WebSocket (`/ws/mpeg1`) that Nginx proxies to a small Node server on `127.0.0.1:5180`. Vite isn't needed in production.
+The WebCodecs player streams over a WebSocket (`/ws/mpeg1`) that Nginx proxies to a small Node server on `127.0.0.1:5180`. Vite isn't needed in production.
 
 Run it by hand:
 

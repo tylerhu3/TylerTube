@@ -150,7 +150,7 @@ export function evaluateProbe(probe, ext) {
     notes.push(`audio is ${audio.codec_name || "unknown"}`);
   }
   const warning = notes.length
-    ? `Plays in the WebCodecs player; the Standard player may not play it (${notes.join(", ")}). H.264 + AAC MP4 works everywhere.`
+    ? `Transcoded on the fly by the WebCodecs player (${notes.join(", ")}); H.264 + AAC MP4 is recommended for downloads and background audio.`
     : undefined;
   return { ok: true, warning, duration };
 }

@@ -1,4 +1,4 @@
-// Background audio: one hidden <audio> playing the same MP4 the Standard player uses, so sound
+// Background audio: one hidden <audio> playing the video's MP4 URL directly, so sound
 // keeps going while the page is hidden (iOS interrupts the engine's AudioContext and throttles
 // timers there). Owned by WebCodecsPlayer.jsx; rules in backgroundHandoff.js.
 //

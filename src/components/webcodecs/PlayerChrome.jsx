@@ -147,8 +147,7 @@ export function ControlBar({
   onResetSync,
   onToggleSettings,
   onToggleTheater,
-  onToggleFullscreen,
-  onSwitchToStandard
+  onToggleFullscreen
 }) {
   const volIcon = isMuted || volumePct === 0 ? ICONS.mute : volumePct < 50 ? ICONS.volLow : ICONS.volHigh;
   return (
@@ -222,16 +221,6 @@ export function ControlBar({
             <path d={isFullscreen ? ICONS.fsExit : ICONS.fsEnter} />
           </svg>
         </button>
-        {onSwitchToStandard && (
-          <button
-            type="button"
-            className="yt-standard-btn"
-            onClick={onSwitchToStandard}
-            title="Switch back to Standard Player (D)"
-          >
-            Use Standard Player
-          </button>
-        )}
       </div>
     </div>
   );

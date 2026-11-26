@@ -1,7 +1,7 @@
 # TylerTube
 
-Self-hosted video streaming SPA: React 18 + Vite 5 (plain JS/JSX, no TS), a WebCodecs canvas
-player (default) and a Plyr "Standard" player, Nginx in production on macOS.
+Self-hosted video streaming SPA: React 18 + Vite 5 (plain JS/JSX, no TS), powered exclusively by a
+WebCodecs canvas player, with Nginx in production on macOS.
 User-facing docs: [README.md](README.md).
 
 ## Architecture
@@ -45,18 +45,16 @@ Internet ─► Netlify (redirect-site/, 302) ─► *.trycloudflare.com quick t
     ffmpeg receive `SIGSTOP`/`SIGCONT` on pause/resume and `SIGKILL` on teardown.
   - `media-files.js` (`resolveLocalVideoFile`, path-traversal guard, ffprobe helpers), `shared.js`,
     `build-info.js` (version `define`s).
-- **Player modes** (`playerMode` in `App.jsx`, toggled by D / the player buttons):
-  - `"webcodecs"` (default where `window.VideoDecoder` exists): `VideoPlayer.jsx` renders
-    `WebCodecsPlayer.jsx`; `webcodecs/WebCodecsEngine.js` decodes with `VideoDecoder` onto a canvas
-    and plays PCM on an `AudioContext`, which is the master clock (video is presented against it).
-    Canvas, not `<video>`, because Tesla's browser pauses `<video>` while driving.
-  - `"standard"`: Plyr on a native `<video>`. Plyr stays mounted (hidden) in WebCodecs mode.
-  - Both save to the same watch-progress store (`tylertube_watch_progress`). `VideoPlayer.jsx`
-    keeps `positionRef` (exact last position) and hands it across a mode switch; a hidden Plyr
-    doesn't report progress while WebCodecs is active.
-  - YouTube playback streams exclusively via `"webcodecs"` on canvas (`targetFile.startsWith("yt:")`).
-    Plyr is bypassed so the DOM `<video>` doesn't attempt to load raw `yt:` strings, and background
-    `<audio>` handoff is skipped.
+- **Player** (WebCodecs-only):
+  - `VideoPlayer.jsx` wraps `WebCodecsPlayer.jsx` (plus floating side player, metadata, resume
+    badge, and external skip/nav controls); `webcodecs/WebCodecsEngine.js` decodes H.264 with
+    `VideoDecoder` onto a canvas and plays PCM on an `AudioContext`, which is the master clock
+    (video is presented against it). Canvas, not `<video>`, because Tesla's browser pauses
+    `<video>` while driving.
+  - Watch progress is saved to `tylertube_watch_progress`, and `VideoPlayer.jsx` keeps
+    `positionRef` (exact last position) for sub-second resume when re-showing a hidden player.
+  - YouTube playback streams via the same WebCodecs canvas player (`targetFile.startsWith("yt:")`),
+    with background `<audio>` handoff skipped.
 - **State:** all app state is in `src/App.jsx` (no router, no store). Pages are switched by
   `currentPage` = `"home" | "history" | "favorites" | "upload" | "youtube" | "shorts"` (Upload stays mounted, hidden,
   once opened so a queue keeps running while you browse; YouTube/Shorts active video is tracked in `activeCustomVideo`).
@@ -73,7 +71,7 @@ Internet ─► Netlify (redirect-site/, 302) ─► *.trycloudflare.com quick t
 | `src/lib/storage.js` | Never-throwing localStorage helpers (`readJSON`, `writeJSON`, `writeString`, …) |
 | `src/lib/sync.js`, `syncMerge.js` | Server sync of localStorage (see State) and the shared merge rules |
 | `src/utils/format.js` | Shared formatting (`formatDuration`) |
-| `src/components/VideoPlayer.jsx` | Plyr player, standard/webcodecs switch, position handoff |
+| `src/components/VideoPlayer.jsx` | Player wrapper (WebCodecs player, floating side player, metadata, external controls) |
 | `src/components/WebCodecsPlayer.jsx` | WebCodecs player component: state/refs, engine lifecycle, controls |
 | `src/components/YouTubePage.jsx` | YouTube portal: search, URL direct streaming, quick topic chips |
 | `src/components/ShortsPage.jsx` | YouTube Shorts portal: vertical 9:16 short-form cards, search, direct short streaming |
@@ -93,7 +91,7 @@ Internet ─► Netlify (redirect-site/, 302) ─► *.trycloudflare.com quick t
 | `nginx.conf` | Production config (copied to `/opt/homebrew/etc/nginx/`) |
 | `public/videos/`, `public/thumbnails/` | Media, ~51 GB, gitignored. **Never read or list recursively.** |
 
-CSS map: `theme` (vars, accent themes) · `navbar` · `layout` · `player` (standard + floating) ·
+CSS map: `theme` (vars, accent themes) · `navbar` · `layout` · `player` (player bar + floating) ·
 `library` · `side-menu` · `subpages` · `mobile` · `webcodecs-player` (`.yt-*`) · `theme-picker` · `youtube`.
 Use `grep -n "^/\* " src/styles/<file>.css` to find sections.
 
@@ -120,7 +118,7 @@ Requires `ffmpeg` (with libx264)/`ffprobe` on PATH.
 
 ## Conventions
 
-- Function components + hooks. Plyr and the WebCodecs engine are driven imperatively through refs;
+- Function components + hooks. The WebCodecs engine is driven imperatively through refs;
   long-lived values that callbacks read go in `useRef` (see the `*Ref` pattern in `WebCodecsPlayer.jsx`).
 - localStorage: key constants at the top of `App.jsx` (`tylertube_*`); read in a lazy
   `useState` initializer and write via `src/lib/storage.js` helpers (never raw `localStorage`).
@@ -142,8 +140,6 @@ Requires `ffmpeg` (with libx264)/`ffprobe` on PATH.
 - `build.copyPublicDir: false`. Nginx serves media from `public/`. Root-level assets that `dist/`
   needs (favicons, manifest) are copied by a hard-coded list in `closeBundle()`
   in `server/plugin.js`. **New public asset → add it to that list.**
-- Never render the Plyr `<video>` through JSX state changes; it's mounted once via ref so Plyr's
-  DOM wrapper doesn't fight React.
 - `drive-ws.js` (server) and `WebCodecsEngine.js` (client) share a JSON control protocol
   (`pause|resume|seek|speed|quality|loop` ↔ `meta|status|reset|ended|error`) plus the binary
   frame format in `server/webcodecs-stream.js` ↔ `webcodecs/protocol.js`. Change them together.
@@ -165,7 +161,7 @@ Requires `ffmpeg` (with libx264)/`ffprobe` on PATH.
   The floating PiP mini-player (`isSidePlayer` / `.floating-player`) uses `position: fixed`.
 - **yt-dlp priority:** `server/youtube.js` checks Homebrew's `/opt/homebrew/bin/yt-dlp` before user home (`~/.local/bin/yt-dlp`)
   to ensure the latest binary with current YouTube SABR cipher support is invoked.
-- Theme migration flag `tylertube_theme_migrated_v2` in `App.jsx`: don't remove casually.
+- Theme migration flag `tylertube_theme_migrated_v3` in `App.jsx`: don't remove casually.
 - Nginx serves from the symlink `/Users/Shared/MyStreamingApp` → this repo.
 - `scripts/check.mjs` relies on `@babel/parser`/`@babel/traverse`, installed transitively by
   `@vitejs/plugin-react`.

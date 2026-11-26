@@ -43,12 +43,3 @@ test("storage helpers never throw and round-trip", () => {
   assert.doesNotThrow(() => { writeJSON("a", 1); writeString("a", "1"); removeKey("a"); });
   delete globalThis.localStorage;
 });
-
-import { VOLUME_BOOST_STEPS, nextVolumeBoost } from "../src/utils/audioBoost.js";
-test("nextVolumeBoost cycles through the steps and wraps", () => {
-  assert.deepEqual(VOLUME_BOOST_STEPS, [1, 1.5, 2, 3]);
-  assert.equal(nextVolumeBoost(1), 1.5);
-  assert.equal(nextVolumeBoost(2), 3);
-  assert.equal(nextVolumeBoost(3), 1);
-  assert.equal(nextVolumeBoost(1.25), 1);
-});

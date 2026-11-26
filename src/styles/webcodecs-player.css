@@ -524,25 +524,6 @@
     color: #fff;
 }
 
-/* "Use Standard Player": neutral, same translucent look as the pill buttons */
-.yt-standard-btn {
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    color: #ddd;
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    margin-left: 4px;
-    white-space: nowrap;
-}
-
-.yt-standard-btn:hover {
-    background: rgba(255, 255, 255, 0.22);
-    color: #fff;
-}
-
 /* Settings Popup Menu */
 .yt-settings-menu {
     display: none;
@@ -672,16 +653,11 @@
     letter-spacing: 0.02em;
 }
 
-/* WebCodecs player accent (tag only; the player-switch buttons stay neutral) */
+/* WebCodecs player accent tag */
 .yt-webcodecs-player .yt-drive-tag {
     background: #0b7a75;
     border-color: #12a39c;
     color: #ffffff;
-}
-
-.webcodecs-switch-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
 }
 
 @media (max-width: 600px) {

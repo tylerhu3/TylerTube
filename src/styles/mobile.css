@@ -275,26 +275,6 @@
     display: none;
 }
 
-/* Plyr Mobile Control Bar Refinements */
-[data-view-mode="mobile"] .plyr__controls {
-    flex-wrap: wrap;
-    padding: 8px 10px 6px !important;
-    gap: 2px;
-}
-
-[data-view-mode="mobile"] .plyr__controls .plyr__progress__container {
-    flex: 1 0 100%;
-    order: -1;
-    margin-bottom: 4px;
-}
-
-[data-view-mode="mobile"] .plyr__volume input[type="range"],
-[data-view-mode="mobile"] .plyr__control[data-plyr="pip"],
-[data-view-mode="mobile"] .plyr__control[data-plyr="airplay"],
-[data-view-mode="mobile"] .plyr__control[data-plyr="download"] {
-    display: none !important;
-}
-
 /* Standard Viewport Media Queries when not forcing Desktop 2-column on tiny screens */
 @media (max-width: 1024px) {
     [data-view-mode="desktop"] .container {

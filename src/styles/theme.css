@@ -8,16 +8,16 @@
     --bg-input: #ffffff;
     --text-main: #0f0f0f;
     --text-muted: #606060;
-    --accent: #0284c7;
-    --accent-hover: #0369a1;
-    --accent-glow: rgba(2, 132, 199, 0.12);
-    --folder-color: #0284c7;
+    --accent: #ec4899;
+    --accent-hover: #db2777;
+    --accent-glow: rgba(236, 72, 153, 0.12);
+    --folder-color: var(--accent);
     --border: #e5e5e5;
     --input-border: #cccccc;
     --input-focus: #1c62b9;
     --active-btn-bg: #0f0f0f;
     --active-btn-text: #ffffff;
-    --active-card-ring: rgba(2, 132, 199, 0.28);
+    --active-card-ring: rgba(236, 72, 153, 0.28);
     --video-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
     /* Status colors (upload queue): text, tinted background, border */
     --danger: #dc2626;
@@ -29,7 +29,6 @@
     --success: #16a34a;
     --success-bg: rgba(22, 163, 74, 0.15);
     --thumb-bg: linear-gradient(135deg, #f2f2f2, #e5e5e5);
-    --plyr-color-main: var(--accent);
     --radius: 12px;
 }
 
@@ -42,22 +41,21 @@
     --bg-input: #121212;
     --text-main: #f1f1f1;
     --text-muted: #aaaaaa;
-    --accent: #38bdf8;
-    --accent-hover: #7dd3fc;
-    --accent-glow: rgba(56, 189, 248, 0.18);
-    --folder-color: #38bdf8;
+    --accent: #f43f5e;
+    --accent-hover: #fb7185;
+    --accent-glow: rgba(244, 63, 94, 0.18);
+    --folder-color: var(--accent);
     --border: rgba(255, 255, 255, 0.12);
     --input-border: #303030;
     --input-focus: #1c62b9;
     --active-btn-bg: #f1f1f1;
     --active-btn-text: #0f0f0f;
-    --active-card-ring: rgba(56, 189, 248, 0.35);
+    --active-card-ring: rgba(244, 63, 94, 0.35);
     --video-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
     --danger: #f87171;
     --warning: #fbbf24;
     --success: #4ade80;
     --thumb-bg: linear-gradient(135deg, #272727, #181818);
-    --plyr-color-main: var(--accent);
     --radius: 12px;
 }
 

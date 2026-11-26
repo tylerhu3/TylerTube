@@ -81,8 +81,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     onTimeUpdate,
     onEnded,
     isHidden = false,
-    onToggleTheater,
-    onSwitchToStandard
+    onToggleTheater
   },
   ref
 ) {
@@ -975,7 +974,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetFile, isHidden, supported, reconnectKey]);
 
-  // Background <audio>: created once, pointed at the current file (same URL as Plyr's video.src).
+  // Background <audio>: created once, pointed at the current file URL.
   useEffect(() => {
     if (!supported || isHidden || !targetFile || !handoffNeededRef.current || targetFile.startsWith("yt:")) return;
     if (!BackgroundAudio.isSupported()) return;
@@ -1231,13 +1230,8 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         </div>
         <div className="yt-buffering-overlay">
           <div className="yt-buffering-text">
-            This browser has no WebCodecs VideoDecoder. Use the Standard player.
+            This browser does not support WebCodecs VideoDecoder.
           </div>
-          {onSwitchToStandard && (
-            <button type="button" className="yt-standard-btn" onClick={onSwitchToStandard}>
-              Use Standard Player
-            </button>
-          )}
         </div>
       </div>
     );
@@ -1341,7 +1335,6 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
           }}
           onToggleTheater={onToggleTheater}
           onToggleFullscreen={handleToggleFullscreen}
-          onSwitchToStandard={onSwitchToStandard}
         />
       </div>
     </div>
