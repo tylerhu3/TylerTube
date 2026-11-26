@@ -61,6 +61,8 @@ export class WebCodecsEngine {
     this.awaitingReset = false;
     this.serverEnded = false;
     this.playbackEnded = false;
+    this.fatalError = null;
+    this.disconnected = false;
     this.flushRequested = false;
     this.needKeyframe = true;
     this.encoded = [];
@@ -138,7 +140,10 @@ export class WebCodecsEngine {
     this.gain = this.audioCtx.createGain();
     this.gain.connect(this.audioCtx.destination);
     this.applyGain();
-    this.audioCtx.onstatechange = () => this.pump();
+    this.audioCtx.onstatechange = () => {
+      this.cb.onAudioLockChange?.(this.isAudioLocked());
+      this.pump();
+    };
   }
 
   connect() {
@@ -166,7 +171,14 @@ export class WebCodecsEngine {
     };
     ws.onclose = () => {
       if (this.destroyed) return;
-      this.cb.onStatus?.("Disconnected");
+      this.disconnected = true;
+      if (!this.serverEnded) {
+        this.freezeClock();
+        this.setBuffering(false);
+      }
+      if (!this.fatalError) {
+        this.cb.onStatus?.("Disconnected");
+      }
       // The player may rebuild the engine (e.g. a socket iOS killed in the background).
       this.cb.onDisconnected?.();
     };
@@ -211,16 +223,24 @@ export class WebCodecsEngine {
       this.startNewStream(msg);
     } else if (msg.type === "ended") {
       this.serverEnded = true;
+    } else if (msg.type === "error") {
+      this.fatalError = msg.message || "Stream error";
+      this.freezeClock();
+      this.setBuffering(false);
+      this.cb.onError?.(this.fatalError);
+      return;
     }
     this.cb.onControl?.(msg);
   }
 
   startNewStream(msg) {
     this.awaitingReset = false;
+    this.fatalError = null;
     this.flushMedia();
     this.serverEnded = false;
     this.playbackEnded = false;
     if (typeof msg.hasAudio === "boolean") this.hasAudio = msg.hasAudio;
+    this.cb.onAudioLockChange?.(this.isAudioLocked());
     const q = parseInt(msg.quality, 10);
     const fps = Number(msg.fps);
     this.streamFps = fps > 0 ? fps : 0;
@@ -341,7 +361,10 @@ export class WebCodecsEngine {
         // Ignore
       }
       this.decoder = null;
-      this.cb.onError?.(`VideoDecoder failed (${this.codec}): ${text}`);
+      this.fatalError = `VideoDecoder failed (${this.codec}): ${text}`;
+      this.freezeClock();
+      this.setBuffering(false);
+      this.cb.onError?.(this.fatalError);
       return;
     }
     this.cb.onStatus?.(`Decoder error: ${text}`);
@@ -630,7 +653,14 @@ export class WebCodecsEngine {
 
   // Buffering, clock-source switching, starvation and end-of-stream (runs every rAF and pump).
   updateState() {
-    if (this.awaitingReset || this.playbackEnded) return;
+    if (
+      this.awaitingReset ||
+      this.playbackEnded ||
+      this.fatalError ||
+      (this.disconnected && !this.serverEnded)
+    ) {
+      return;
+    }
     const now = performance.now();
     if (now - this.stats.fpsWindowStart >= 1000) {
       this.stats.fps = this.stats.fpsWindow;
@@ -814,7 +844,14 @@ export class WebCodecsEngine {
   unlockAudio() {
     const c = this.audioCtx;
     if (c && c.state !== "running" && c.state !== "closed") {
-      c.resume().then(() => this.pump()).catch(() => {});
+      c.resume()
+        .then(() => {
+          this.cb.onAudioLockChange?.(this.isAudioLocked());
+          this.pump();
+        })
+        .catch(() => {});
+    } else {
+      this.cb.onAudioLockChange?.(this.isAudioLocked());
     }
   }
 
@@ -900,7 +937,9 @@ export class WebCodecsEngine {
       receivedAheadVideoSec: Math.max(0, this.videoEndSec() - clockSec),
       streamTimeSec: clockSec,
       buffering: this.buffering,
-      audioGap: this.audioGap
+      audioGap: this.audioGap,
+      fatalError: this.fatalError,
+      disconnected: this.disconnected
     };
   }
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { findFfmpegBinary } from "../server/media-files.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,7 +49,7 @@ export async function generateThumbnailForVideo(videoPath, outputPath) {
   const timestamps = ["00:00:05", "00:00:01", "00:00:00"];
   for (const ss of timestamps) {
     try {
-      await execFileAsync("ffmpeg", [
+      await execFileAsync(findFfmpegBinary(), [
         "-y",
         "-ss",
         ss,

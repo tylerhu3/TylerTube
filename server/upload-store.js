@@ -28,6 +28,7 @@ import {
   validateName
 } from "./upload-rules.js";
 import { encodeUrlPath } from "./shared.js";
+import { findFfprobeBinary } from "./media-files.js";
 
 export const UPLOADS_DIRNAME = ".uploads";
 export const DEFAULT_RESERVE_BYTES = 5 * 1024 ** 3; // always leave 5 GB free
@@ -47,7 +48,7 @@ const PROBE_TIMEOUT_MS = 120_000;
 export function ffprobeJSON(file) {
   return new Promise((resolve, reject) => {
     execFile(
-      "ffprobe",
+      findFfprobeBinary(),
       ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", file],
       { timeout: PROBE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => {

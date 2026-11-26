@@ -6,7 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { encodeUrlPath } from "../server/shared.js";
 import { scanVideosDirectory, findMatchingSubtitle } from "../server/catalog.js";
-import { resolveLocalVideoFile } from "../server/media-files.js";
+import {
+  findFfmpegBinary,
+  findFfprobeBinary,
+  findMediaBinary,
+  resolveLocalVideoFile
+} from "../server/media-files.js";
 
 function makeTree(files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tylertube-"));
@@ -81,4 +86,51 @@ test("resolveLocalVideoFile blocks path traversal", () => {
     const r = resolveLocalVideoFile(p, videos);
     assert.ok(r === null || r.startsWith(videos + path.sep), `${p} escaped: ${r}`);
   }
+});
+
+test("findMediaBinary resolves env override, PATH, and platform fallback locations", () => {
+  const winGetFfmpeg = path.win32.join("C:\\Users\\test\\AppData\\Local", "Microsoft", "WinGet", "Links", "ffmpeg.exe");
+  const pathFfmpeg = path.win32.join("C:\\custom\\bin", "ffmpeg.exe");
+  const envOverride = "C:\\override\\ffmpeg.exe";
+
+  assert.equal(
+    findFfmpegBinary({
+      platform: "win32",
+      env: { FFMPEG_PATH: envOverride, Path: "C:\\custom\\bin" },
+      existsSync: (p) => p === envOverride || p === pathFfmpeg
+    }),
+    envOverride
+  );
+  assert.equal(
+    findFfmpegBinary({
+      platform: "win32",
+      env: { Path: "C:\\missing;C:\\custom\\bin", LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local" },
+      existsSync: (p) => p === pathFfmpeg || p === winGetFfmpeg
+    }),
+    pathFfmpeg
+  );
+  assert.equal(
+    findFfmpegBinary({
+      platform: "win32",
+      env: { Path: "C:\\Windows\\System32", LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local" },
+      existsSync: (p) => p === winGetFfmpeg
+    }),
+    winGetFfmpeg
+  );
+  assert.equal(
+    findFfprobeBinary({
+      platform: "darwin",
+      env: { PATH: "/usr/bin" },
+      existsSync: (p) => p === "/opt/homebrew/bin/ffprobe"
+    }),
+    "/opt/homebrew/bin/ffprobe"
+  );
+  assert.equal(
+    findMediaBinary("ffmpeg", {
+      platform: "linux",
+      env: { PATH: "/usr/bin" },
+      existsSync: () => false
+    }),
+    "ffmpeg"
+  );
 });

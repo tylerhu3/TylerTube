@@ -16,7 +16,7 @@ const BROWSER_AND_NODE_GLOBALS = new Set([
   "window", "document", "navigator", "localStorage", "location", "screen",
   "requestAnimationFrame", "cancelAnimationFrame", "getComputedStyle", "matchMedia",
   "ResizeObserver", "IntersectionObserver", "MutationObserver", "HTMLElement", "Element",
-  "Image", "Audio", "AudioContext", "webkitAudioContext", "alert", "self",
+  "Image", "Audio", "AudioContext", "webkitAudioContext", "WebSocket", "alert", "self",
   "process", "Buffer", "__dirname", "__filename",
   "__APP_VERSION__", "__BUILD_TIME__", "__BUILD_CODE__", "__GIT_COMMIT__"
 ]);

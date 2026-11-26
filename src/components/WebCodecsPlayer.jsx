@@ -124,6 +124,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   // Tap-to-reveal: true when the current touch/pen press started while the controls were hidden.
   const controlsHiddenNowRef = useRef(false);
   const tapRevealOnlyRef = useRef(false);
+  const audioLockedOnPressRef = useRef(false);
   const fpsSettingRef = useRef(null);
   const autoFpsStateRef = useRef(createAutoFpsState());
   const autoFpsLadderRef = useRef(null); // built from meta/reset fpsCap
@@ -160,6 +161,8 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   const [syncOffsetMs, setSyncOffsetMs] = useState(0);
   const [fps, setFps] = useState(0);
   const [statusText, setStatusText] = useState("Starting WebCodecs stream...");
+  const [errorText, setErrorText] = useState("");
+  const [audioLocked, setAudioLocked] = useState(false);
   const [displayTime, setDisplayTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [hoverPct, setHoverPct] = useState(0);
@@ -750,6 +753,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     setDisplayTime(startSeek);
     setDuration(0);
     setFps(0);
+    setErrorText("");
     setStatusText("Starting WebCodecs stream...");
     showControlsTemporarily();
 
@@ -826,6 +830,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         onControl: (msg) => {
           if (cancelled) return;
           if (msg.type === "meta") {
+            setErrorText("");
             applyStreamInfo(msg);
             loopEnabledRef.current = Boolean(msg.loop);
             setLoopEnabled(Boolean(msg.loop));
@@ -840,6 +845,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
               }
             }
           } else if (msg.type === "reset") {
+            setErrorText("");
             applyStreamInfo(msg);
           } else if (msg.type === "ended") {
             // The engine may still hold buffered media; onPlaybackEnded fires when it runs out.
@@ -872,12 +878,19 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         onBuffering: (b) => {
           if (!cancelled) setIsBuffering(b);
         },
+        onAudioLockChange: (locked) => {
+          if (!cancelled) setAudioLocked(Boolean(locked));
+        },
         onPlaybackEnded: handlePlaybackEnded,
         onStatus: (text) => {
           if (!cancelled) setStatusText(text);
         },
         onError: (text) => {
-          if (!cancelled) setStatusText(`Error: ${text}`);
+          if (!cancelled) {
+            setIsBuffering(false);
+            setErrorText(text);
+            setStatusText(`Error: ${text}`);
+          }
         },
         // Socket closed under us. A handoff in progress is recovered by returnFromBackground
         // (isConnected() false). One auto-rebuild per resume, so a dead server can't loop.
@@ -888,10 +901,15 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
             return;
           }
           const sinceResume = Date.now() - resumedAtRef.current;
-          if (resumedAtRef.current <= 0 || sinceResume > AUTO_REBUILD_WINDOW_MS) return;
-          if (autoRebuildUsedRef.current) return;
-          autoRebuildUsedRef.current = true;
-          rebuildEngineHere();
+          if (resumedAtRef.current > 0 && sinceResume <= AUTO_REBUILD_WINDOW_MS && !autoRebuildUsedRef.current) {
+            autoRebuildUsedRef.current = true;
+            rebuildEngineHere();
+            return;
+          }
+          if (!engine.serverEnded) {
+            setIsBuffering(false);
+            setErrorText((prev) => prev || "Stream disconnected");
+          }
         }
       }
     });
@@ -900,6 +918,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     engine.setSyncOffset(syncOffsetRef.current);
     engine.setRebufferTarget(bufferTargetRef.current);
     engineRef.current = engine;
+    setAudioLocked(engine.isAudioLocked());
     engine.unlockAudio(); // not tryUnlockAudio: no gesture here, so leave the background <audio> alone
 
     const statsTimer = setInterval(() => {
@@ -925,11 +944,18 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         );
         setBufferedPct(Math.max(0, Math.min(100, (end / dur) * 100)));
       }
-      const audioLocked = engine.isAudioLocked();
+      const locked = engine.isAudioLocked();
+      setAudioLocked(locked);
       const offTxt = `${s.avOffsetMs > 0 ? "+" : ""}${s.avOffsetMs}ms`;
-      if (s.buffering || isEndedRef.current || isPausedRef.current) {
-        // Keep the last status; the top bar shows "Buffering..." itself.
-      } else if (audioLocked) {
+      if (
+        s.buffering ||
+        s.fatalError ||
+        (s.disconnected && !engine.serverEnded) ||
+        isEndedRef.current ||
+        isPausedRef.current
+      ) {
+        // Keep the last status; the top bar shows "Buffering..." or the error/disconnect text.
+      } else if (locked) {
         setStatusText("Tap anywhere to unmute");
       } else if (s.decoderState === "closed" || s.decoderState === "none") {
         // Error text already set by onError.
@@ -1139,19 +1165,29 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   // The snapshot is taken on press, before the player's touchstart/mousemove reveal them.
   const handleCanvasPointerDown = (e) => {
     tapRevealOnlyRef.current = e.pointerType !== "mouse" && controlsHiddenNowRef.current;
+    audioLockedOnPressRef.current = Boolean(engineRef.current?.isAudioLocked());
   };
   const handleCanvasTouchStart = () => {
     // Browsers without Pointer Events; otherwise pointerdown already set the same snapshot.
     if (typeof window !== "undefined" && !window.PointerEvent) {
       tapRevealOnlyRef.current = controlsHiddenNowRef.current;
+      audioLockedOnPressRef.current = Boolean(engineRef.current?.isAudioLocked());
     }
   };
 
   const handleCanvasClick = (e) => {
     const revealOnly = tapRevealOnlyRef.current;
+    const wasAudioLocked = audioLockedOnPressRef.current;
     tapRevealOnlyRef.current = false;
+    audioLockedOnPressRef.current = false;
     if (settingsOpen) {
       setSettingsOpen(false);
+      return;
+    }
+    if (wasAudioLocked && !isPausedRef.current) {
+      tryUnlockAudio(e);
+      triggerBezel("unmute");
+      showControlsTemporarily();
       return;
     }
     const now = Date.now();
@@ -1254,6 +1290,25 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         if (!isPaused && !settingsOpen && !isDraggingSeek) setControlsHidden(true);
       }}
     >
+      {audioLocked && !isMuted && !isEnded && !errorText && !isHidden && (
+        <button
+          type="button"
+          className="yt-audio-toast"
+          role="status"
+          aria-live="polite"
+          onClick={(e) => {
+            e.stopPropagation();
+            tryUnlockAudio(e);
+            triggerBezel("unmute");
+          }}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
+          </svg>
+          <span>Tap anywhere on the page to enable audio</span>
+        </button>
+      )}
+
       <PlayerTopBar
         tag="⚡ WEBCODECS"
         title={displayChannelName}
@@ -1271,7 +1326,23 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         onClick={handleCanvasClick}
       />
 
-      {isBuffering && !isPaused && <BufferingOverlay bufferedAheadSec={bufferedAheadSec} />}
+      {errorText ? (
+        <div className="yt-buffering-overlay">
+          <div className="yt-buffering-text">{errorText}</div>
+          <button
+            type="button"
+            className="yt-pill-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              rebuildEngineHere();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : (
+        isBuffering && !isPaused && <BufferingOverlay bufferedAheadSec={bufferedAheadSec} />
+      )}
 
       <PlayerBezel type={bezelType} bezelKey={bezelKey} />
       <SkipIndicators leftLabel={skipLeftLabel} rightLabel={skipRightLabel} />

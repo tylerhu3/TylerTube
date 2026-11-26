@@ -3,6 +3,72 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
+const binaryCache = new Map();
+
+// Resolves ffmpeg / ffprobe even when the host process inherited a stale PATH
+// (e.g. Windows terminals/services opened before WinGet/Scoop/Chocolatey installed them,
+// or macOS LaunchAgents with a minimal PATH).
+export function findMediaBinary(
+  name,
+  { env = process.env, platform = process.platform, existsSync = fs.existsSync } = {}
+) {
+  const useCache = env === process.env && platform === process.platform && existsSync === fs.existsSync;
+  if (useCache && binaryCache.has(name)) return binaryCache.get(name);
+
+  const envKey = `${name.toUpperCase()}_PATH`;
+  if (env[envKey] && existsSync(env[envKey])) {
+    if (useCache) binaryCache.set(name, env[envKey]);
+    return env[envKey];
+  }
+
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const exe = platform === "win32" && !name.toLowerCase().endsWith(".exe") ? `${name}.exe` : name;
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === "path");
+  const pathDirs = (pathKey ? env[pathKey] || "" : "")
+    .split(platform === "win32" ? ";" : ":")
+    .map((dir) => dir.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+
+  for (const dir of pathDirs) {
+    const candidate = pathApi.join(dir, exe);
+    if (existsSync(candidate)) {
+      if (useCache) binaryCache.set(name, candidate);
+      return candidate;
+    }
+  }
+
+  const fallbacks =
+    platform === "win32"
+      ? [
+          env.LOCALAPPDATA ? pathApi.join(env.LOCALAPPDATA, "Microsoft", "WinGet", "Links", exe) : "",
+          env.USERPROFILE ? pathApi.join(env.USERPROFILE, "scoop", "shims", exe) : "",
+          pathApi.join("C:\\ProgramData\\chocolatey\\bin", exe),
+          pathApi.join("C:\\ffmpeg\\bin", exe)
+        ]
+      : [`/opt/homebrew/bin/${exe}`, `/usr/local/bin/${exe}`, `/usr/bin/${exe}`];
+
+  for (const candidate of fallbacks) {
+    if (candidate && existsSync(candidate)) {
+      if (useCache) binaryCache.set(name, candidate);
+      return candidate;
+    }
+  }
+
+  return name;
+}
+
+export function findFfmpegBinary(opts) {
+  return findMediaBinary("ffmpeg", opts);
+}
+
+export function findFfprobeBinary(opts) {
+  return findMediaBinary("ffprobe", opts);
+}
+
+export function resetCachedMediaBinaries() {
+  binaryCache.clear();
+}
+
 export function resolveLocalVideoFile(rawParam, videosDir) {
   const publicDir = path.resolve(process.cwd(), "public");
 
@@ -56,7 +122,7 @@ export function probeVideoDuration(filePath) {
   if (!filePath) return 0;
   try {
     const out = execFileSync(
-      "ffprobe",
+      findFfprobeBinary(),
       [
         "-v",
         "error",
@@ -82,7 +148,7 @@ export function probeHasAudioStream(filePath) {
   if (!filePath) return false;
   try {
     const out = execFileSync(
-      "ffprobe",
+      findFfprobeBinary(),
       [
         "-v",
         "error",
@@ -110,7 +176,7 @@ export function probeVideoFrameRate(filePath) {
   if (!filePath) return { avg: "", r: "" };
   try {
     const out = execFileSync(
-      "ffprobe",
+      findFfprobeBinary(),
       [
         "-v",
         "error",

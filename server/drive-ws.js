@@ -6,6 +6,7 @@
 import { spawn } from "node:child_process";
 import { WebSocketServer } from "ws";
 import {
+  findFfmpegBinary,
   resolveLocalVideoFile,
   probeVideoDuration,
   probeHasAudioStream,
@@ -87,6 +88,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     let activeYtDlp = null;
     let pauseHoldTimer = null;
     let drainInterval = null;
+    let syncPipes = null;
     let wsClosed = false;
     let streamSeq = 0;
 
@@ -160,6 +162,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     }
 
     function killActiveFfmpeg() {
+      syncPipes = null;
       if (drainInterval) {
         clearInterval(drainInterval);
         drainInterval = null;
@@ -266,6 +269,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
       }
 
       try {
+        const ffmpegBin = findFfmpegBinary();
         let ffmpeg;
         if (isYouTube && ytStreams && ytStreams.videoUrl) {
           const args = buildWebCodecsFfmpegArgs({
@@ -279,7 +283,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             fps,
             hasAudio
           });
-          ffmpeg = spawn("ffmpeg", args, {
+          ffmpeg = spawn(ffmpegBin, args, {
             stdio: hasAudio
               ? ["ignore", "pipe", "pipe", "pipe"]
               : ["ignore", "pipe", "pipe"]
@@ -298,7 +302,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             fps,
             hasAudio: true
           });
-          ffmpeg = spawn("ffmpeg", args, {
+          ffmpeg = spawn(ffmpegBin, args, {
             stdio: ["pipe", "pipe", "pipe", "pipe"]
           });
           activeYtDlp.stdout.pipe(ffmpeg.stdin);
@@ -314,7 +318,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             fps,
             hasAudio
           });
-          ffmpeg = spawn("ffmpeg", args, {
+          ffmpeg = spawn(ffmpegBin, args, {
             stdio: hasAudio
               ? ["ignore", "pipe", "pipe", "pipe"]
               : ["ignore", "pipe", "pipe"]
@@ -329,6 +333,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
         let frameIndex = 0;
         let keyframeSent = false;
         let producedMedia = false;
+        let spawnErrored = false;
         let socketPaused = false; // ws.bufferedAmount backpressure
         let flowPaused = false; // too far ahead of the client's playback
         let playedSec = 0; // wall-clock playback estimate (excludes paused time)
@@ -345,7 +350,9 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             }
           }
         };
-        const updatePipes = () => setPipesPaused(socketPaused || flowPaused);
+        const updatePipes = () =>
+          setPipesPaused(socketPaused || flowPaused || (process.platform === "win32" && isPaused && keyframeSent));
+        syncPipes = updatePipes;
 
         const sendBinary = (buf) => {
           if (wsClosed || activeFfmpeg !== ffmpeg || ws.readyState !== 1) return;
@@ -467,7 +474,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             });
             return;
           }
-          if (code !== null) {
+          if (code !== null && !spawnErrored) {
             sendJson({ type: "status", message: `Stream ended (code ${code})` });
           }
           try {
@@ -479,6 +486,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
 
         ffmpeg.on("error", (err) => {
           if (wsClosed || activeFfmpeg !== ffmpeg) return;
+          spawnErrored = true;
           sendJson({
             type: "error",
             message: (err?.message || "ffmpeg error").slice(0, 100)
@@ -516,11 +524,15 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
           pauseHoldTimer = null;
         }
         if (process.platform === "win32") {
-          try {
-            activeFfmpeg?.stdout?.pause();
-            activeFfmpeg?.stdio?.[3]?.pause();
-          } catch {
-            // Ignore
+          if (syncPipes) {
+            syncPipes();
+          } else {
+            try {
+              activeFfmpeg?.stdout?.pause();
+              activeFfmpeg?.stdio?.[3]?.pause();
+            } catch {
+              // Ignore
+            }
           }
         } else {
           if (activeFfmpeg) {
@@ -546,11 +558,15 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
         }
         if (activeFfmpeg) {
           if (process.platform === "win32") {
-            try {
-              activeFfmpeg.stdout?.resume();
-              activeFfmpeg.stdio?.[3]?.resume();
-            } catch {
-              // Ignore
+            if (syncPipes) {
+              syncPipes();
+            } else {
+              try {
+                activeFfmpeg.stdout?.resume();
+                activeFfmpeg.stdio?.[3]?.resume();
+              } catch {
+                // Ignore
+              }
             }
           } else {
             try {
