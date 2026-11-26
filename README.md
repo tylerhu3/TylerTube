@@ -135,6 +135,21 @@ git clone --recurse-submodules https://github.com/tylerhu3/TylerTube.git
 
 If you already cloned without `--recurse-submodules`, run `git submodule update --init` (or let `scripts/tunnel.mjs` clone `redirect-site/` automatically on first publish).
 
+### Windows Automated Setup (PowerShell)
+
+On a fresh Windows machine, run the resumable setup script from the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
+```
+
+It checks and installs all required dependencies (skipping anything already up to date):
+- **Git**, **Node.js LTS** (≥ 18.15), **Python 3** (≥ 3.9), **FFmpeg/FFprobe**, **yt-dlp**, **cloudflared** (via `winget`)
+- **Nginx for Windows** (downloaded to `C:\nginx` by default; pass `-NginxDir "D:\nginx"` to customize)
+- **npm packages** (`npm install`), `.env` scaffolding, `redirect-site/` submodule init, and Git/GitHub readiness checks
+
+At the end, the script prints a summary of what was already installed, what it installed, anything needing manual intervention (such as GitHub sign-in, Git identity, or `.env` OAuth keys), and the exact next steps to start the server (`npm run deploy:public`). Safe to re-run at any time to resume.
+
 ### 1. Install Dependencies & Run in Development
 
 ```zsh
