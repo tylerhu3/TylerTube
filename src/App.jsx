@@ -14,6 +14,21 @@ import { readJSON, readString, writeString, writeJSON } from "./lib/storage";
 import { createSyncStore } from "./lib/sync";
 import { fetchVisitors, recordVisit } from "./lib/visitors";
 import { fetchAuthStatus, logoutUser } from "./lib/auth";
+import {
+  mergeYouTubeHistory,
+  parseTakeoutWatchHistory
+} from "./lib/youtubeHistory";
+import { getAdjacentPlaylistVideo } from "./lib/youtubePlaylists";
+import {
+  fetchYouTubeHistory,
+  recordYouTubeHistoryWatch,
+  importYouTubeHistoryItems,
+  syncYouTubeHistoryLive,
+  saveYouTubeHistoryCookies,
+  clearYouTubeHistoryCookies,
+  removeYouTubeHistoryItem,
+  clearYouTubeHistory
+} from "./lib/youtubeHistoryApi";
 
 const STORAGE_KEY = "tylertube_watch_progress";
 const FAVORITES_STORAGE_KEY = "tylertube_favorites";
@@ -23,6 +38,7 @@ const COLOR_THEME_STORAGE_KEY = "tylertube_color_theme";
 const SIDE_PLAYER_STORAGE_KEY = "tylertube_side_player_prefs";
 const VIEW_MODE_STORAGE_KEY = "tylertube_view_mode";
 const SYNC_META_STORAGE_KEY = "tylertube_sync_meta";
+const YOUTUBE_RECENT_VIDEOS_KEY = "tylertube_youtube_recent_videos";
 // Upload page (server/upload.js): the upload key, per device and never synced.
 const UPLOAD_KEY_STORAGE_KEY = "tylertube_upload_key";
 // Visitor log (server/visitors.js): this browser's visitor id and optional display name.
@@ -140,7 +156,9 @@ export default function App() {
     getInitialVideoId(watchProgress)
   );
   const [activeCustomVideo, setActiveCustomVideo] = useState(null);
-  const [currentPage, setCurrentPage] = useState("home");
+  const [activeYouTubePlaylist, setActiveYouTubePlaylist] = useState(null);
+  const [isYouTubePlaylistShuffled, setIsYouTubePlaylistShuffled] = useState(false);
+  const [currentPage, setCurrentPage] = useState("youtube");
   const [uploadPageOpened, setUploadPageOpened] = useState(false);
   if (currentPage === "upload" && !uploadPageOpened) setUploadPageOpened(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -150,6 +168,173 @@ export default function App() {
   // Authentication & session state
   const [auth, setAuth] = useState({ configured: false, authenticated: false, user: null });
   const [authNotification, setAuthNotification] = useState(null);
+
+  // Unified YouTube watch history (YouTube.com live sync / Takeout + TylerTube watches)
+  const [youtubeHistory, setYoutubeHistory] = useState(() => {
+    const saved = readJSON(YOUTUBE_RECENT_VIDEOS_KEY, []);
+    if (!Array.isArray(saved)) return [];
+    return mergeYouTubeHistory(
+      [],
+      saved.map((v) => ({
+        ...v,
+        source: v.source || "tylertube",
+        watchedOnYouTube: Boolean(v.watchedOnYouTube)
+      }))
+    );
+  });
+  const [youtubeHistorySync, setYoutubeHistorySync] = useState({
+    liveConfigured: false,
+    cookieSource: "",
+    browser: "",
+    lastSyncedAt: 0,
+    lastSyncSource: "",
+    lastImportedAt: 0
+  });
+  const [youtubeInitialTab, setYoutubeInitialTab] = useState(null);
+
+  const applyServerYouTubeHistory = useCallback((data) => {
+    if (!data) return;
+    if (Array.isArray(data.items)) {
+      setYoutubeHistory(data.items);
+      writeJSON(YOUTUBE_RECENT_VIDEOS_KEY, data.items.slice(0, 100));
+    }
+    if (data.sync && typeof data.sync === "object") {
+      setYoutubeHistorySync(data.sync);
+    }
+  }, []);
+
+  // Load server-persisted YouTube history on mount and whenever auth user changes
+  useEffect(() => {
+    let cancelled = false;
+    fetchYouTubeHistory()
+      .then((data) => {
+        if (cancelled) return;
+        const localSaved = readJSON(YOUTUBE_RECENT_VIDEOS_KEY, []);
+        const localItems = Array.isArray(localSaved)
+          ? localSaved.map((v) => ({
+            ...v,
+            source: v.source || "tylertube",
+            watchedOnYouTube: Boolean(v.watchedOnYouTube)
+          }))
+          : [];
+        const merged = mergeYouTubeHistory(data.items || [], localItems);
+        setYoutubeHistory(merged);
+        writeJSON(YOUTUBE_RECENT_VIDEOS_KEY, merged.slice(0, 100));
+        if (data.sync) setYoutubeHistorySync(data.sync);
+      })
+      .catch(() => {
+        // Keep localStorage history when server endpoint is unavailable
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.authenticated, auth.user?.id]);
+
+  const handleRecordYouTubeWatch = useCallback(
+    (item) => {
+      const rawId = item?.ytId || item?.id?.replace(/^yt_/, "");
+      if (!rawId) return;
+      const entry = {
+        id: rawId,
+        title: item.title || "YouTube Video",
+        author: item.author || item.section || "YouTube",
+        duration: Number(item.duration) || 0,
+        thumbnail:
+          item.thumbnail ||
+          item.poster ||
+          `https://i.ytimg.com/vi/${rawId}/hqdefault.jpg`,
+        viewCount: Number(item.viewCount) || 0,
+        watchedAt: Date.now(),
+        source: "tylertube",
+        watchedOnYouTube: Boolean(item.watchedOnYouTube)
+      };
+
+      setYoutubeHistory((prev) => {
+        const next = mergeYouTubeHistory(prev, [entry]);
+        writeJSON(YOUTUBE_RECENT_VIDEOS_KEY, next.slice(0, 100));
+        return next;
+      });
+
+      recordYouTubeHistoryWatch(entry)
+        .then(applyServerYouTubeHistory)
+        .catch(() => {
+          // Local copy already persisted
+        });
+    },
+    [applyServerYouTubeHistory]
+  );
+
+  const handleSyncYouTubeHistory = useCallback(
+    async ({ browser = "", limit = 60 } = {}) => {
+      const data = await syncYouTubeHistoryLive({ browser, limit });
+      applyServerYouTubeHistory(data);
+      return data;
+    },
+    [applyServerYouTubeHistory]
+  );
+
+  const handleImportYouTubeHistory = useCallback(
+    async (fileText, filename = "") => {
+      const parsedItems = parseTakeoutWatchHistory(fileText, filename, { maxItems: 500 });
+      if (parsedItems.length === 0) {
+        throw new Error("No YouTube watch history entries were found in that file.");
+      }
+      const data = await importYouTubeHistoryItems(parsedItems);
+      applyServerYouTubeHistory(data);
+      return data;
+    },
+    [applyServerYouTubeHistory]
+  );
+
+  const handleSaveYouTubeCookies = useCallback(
+    async (cookiesText) => {
+      const data = await saveYouTubeHistoryCookies(cookiesText);
+      applyServerYouTubeHistory(data);
+      return data;
+    },
+    [applyServerYouTubeHistory]
+  );
+
+  const handleClearYouTubeCookies = useCallback(async () => {
+    const data = await clearYouTubeHistoryCookies();
+    applyServerYouTubeHistory(data);
+    return data;
+  }, [applyServerYouTubeHistory]);
+
+  const handleRemoveYouTubeHistoryItem = useCallback(
+    (rawVideoId) => {
+      const cleanId = String(rawVideoId || "").replace(/^yt_/, "");
+      if (!cleanId) return;
+      setYoutubeHistory((prev) => {
+        const next = prev.filter((item) => item.id !== cleanId);
+        writeJSON(YOUTUBE_RECENT_VIDEOS_KEY, next.slice(0, 100));
+        return next;
+      });
+      removeYouTubeHistoryItem(cleanId)
+        .then(applyServerYouTubeHistory)
+        .catch(() => { });
+    },
+    [applyServerYouTubeHistory]
+  );
+
+  const handleClearYouTubeHistory = useCallback(
+    (scope = "all") => {
+      setYoutubeHistory((prev) => {
+        let next = [];
+        if (scope === "youtube") {
+          next = prev.filter((item) => !item.watchedOnYouTube && item.source === "tylertube");
+        } else if (scope === "tylertube") {
+          next = prev.filter((item) => item.watchedOnYouTube || item.source === "youtube");
+        }
+        writeJSON(YOUTUBE_RECENT_VIDEOS_KEY, next.slice(0, 100));
+        return next;
+      });
+      clearYouTubeHistory(scope)
+        .then(applyServerYouTubeHistory)
+        .catch(() => { });
+    },
+    [applyServerYouTubeHistory]
+  );
 
   // Check auth and URL callback parameters on mount
   useEffect(() => {
@@ -163,7 +348,13 @@ export default function App() {
       const authSuccess = searchParams.get("auth");
       const targetPage = searchParams.get("page");
 
-      if (targetPage && (targetPage === "youtube" || targetPage === "shorts" || targetPage === "upload")) {
+      if (
+        targetPage &&
+        (targetPage === "home" ||
+          targetPage === "youtube" ||
+          targetPage === "shorts" ||
+          targetPage === "upload")
+      ) {
         setCurrentPage(targetPage);
       }
 
@@ -185,7 +376,7 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     await logoutUser();
     setAuth((prev) => ({ ...prev, authenticated: false, user: null }));
-    setCurrentPage((prev) => (prev === "upload" ? "home" : prev));
+    setCurrentPage((prev) => (prev === "upload" ? "youtube" : prev));
   }, []);
 
   // Log this visit once per page load; refresh the list whenever the menu opens.
@@ -290,12 +481,51 @@ export default function App() {
         !prog.hiddenFromHistory &&
         (prog.time > 0 || prog.completed || prog.watched)
       ) {
-        items.push({ video: v, progress: prog });
+        items.push({
+          video: { ...v, historySource: "library" },
+          progress: prog
+        });
       }
     }
+
+    for (const yt of youtubeHistory) {
+      const videoId = `yt_${yt.id}`;
+      const prog = watchProgress[videoId];
+      const watchedAt = Math.max(prog?.updatedAt || 0, yt.watchedAt || 0);
+      const effectiveProgress = prog && !prog.hiddenFromHistory
+        ? {
+          ...prog,
+          duration: prog.duration > 0 ? prog.duration : yt.duration || 0,
+          updatedAt: watchedAt
+        }
+        : {
+          time: 0,
+          duration: yt.duration || 0,
+          completed: false,
+          watched: true,
+          updatedAt: yt.watchedAt || 0
+        };
+
+      items.push({
+        video: {
+          id: videoId,
+          ytId: yt.id,
+          title: yt.title || `YouTube Video (${yt.id})`,
+          duration: yt.duration || 0,
+          src: `yt:${yt.id}`,
+          poster: yt.thumbnail || `https://i.ytimg.com/vi/${yt.id}/hqdefault.jpg`,
+          course: "YouTube",
+          section: yt.author || "YouTube",
+          isYouTube: true,
+          historySource: yt.watchedOnYouTube ? "youtube" : "tylertube"
+        },
+        progress: effectiveProgress
+      });
+    }
+
     items.sort((a, b) => (b.progress.updatedAt || 0) - (a.progress.updatedAt || 0));
     return items;
-  }, [watchProgress]);
+  }, [watchProgress, youtubeHistory]);
 
   const favoriteItems = useMemo(() => {
     const items = [];
@@ -346,22 +576,85 @@ export default function App() {
     filteredVideos.length > 0 ? filteredVideos : VIDEO_LIBRARY;
 
   const handlePrev = useCallback(() => {
+    if (currentVideo?.isYouTube && activeYouTubePlaylist?.items?.length > 0) {
+      const prevVideo = getAdjacentPlaylistVideo(
+        activeYouTubePlaylist,
+        currentVideo.id,
+        -1,
+        { shuffle: isYouTubePlaylistShuffled }
+      );
+      if (prevVideo) {
+        setActiveCustomVideo(prevVideo);
+        setCurrentVideoId(prevVideo.id);
+        handleRecordYouTubeWatch(prevVideo);
+        return;
+      }
+    }
     const idx = activePlaylist.findIndex((v) => v.id === currentVideo?.id);
     const prevIdx =
       idx === -1
         ? 0
         : (idx - 1 + activePlaylist.length) % activePlaylist.length;
     setCurrentVideoId(activePlaylist[prevIdx].id);
-  }, [activePlaylist, currentVideo]);
+  }, [
+    activePlaylist,
+    currentVideo,
+    activeYouTubePlaylist,
+    isYouTubePlaylistShuffled,
+    handleRecordYouTubeWatch
+  ]);
 
   const handleNext = useCallback(() => {
+    if (currentVideo?.isYouTube && activeYouTubePlaylist?.items?.length > 0) {
+      const nextVideo = getAdjacentPlaylistVideo(
+        activeYouTubePlaylist,
+        currentVideo.id,
+        1,
+        { shuffle: isYouTubePlaylistShuffled }
+      );
+      if (nextVideo) {
+        setActiveCustomVideo(nextVideo);
+        setCurrentVideoId(nextVideo.id);
+        handleRecordYouTubeWatch(nextVideo);
+        return;
+      }
+    }
     const idx = activePlaylist.findIndex((v) => v.id === currentVideo?.id);
     const nextIdx = idx === -1 ? 0 : (idx + 1) % activePlaylist.length;
     setCurrentVideoId(activePlaylist[nextIdx].id);
-  }, [activePlaylist, currentVideo]);
+  }, [
+    activePlaylist,
+    currentVideo,
+    activeYouTubePlaylist,
+    isYouTubePlaylistShuffled,
+    handleRecordYouTubeWatch
+  ]);
+
+  const handleSelectYouTubeVideo = useCallback(
+    (video, playlistContext = null) => {
+      setActiveCustomVideo(video);
+      setCurrentVideoId(video.id);
+      if (playlistContext && Array.isArray(playlistContext.items) && playlistContext.items.length > 0) {
+        setActiveYouTubePlaylist(playlistContext);
+      } else {
+        setActiveYouTubePlaylist(null);
+      }
+      handleRecordYouTubeWatch(video);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [handleRecordYouTubeWatch]
+  );
 
   const handleSelectVideo = useCallback(
     (video) => {
+      if (video?.isYouTube || String(video?.id || "").startsWith("yt_")) {
+        handleSelectYouTubeVideo(video, null);
+        if (currentPage !== "youtube" && currentPage !== "shorts" && !isSidePlayer) {
+          setCurrentPage("youtube");
+        }
+        return;
+      }
+      setActiveYouTubePlaylist(null);
       setCurrentVideoId(video.id);
       if (currentPage !== "home" && !isSidePlayer) {
         setCurrentPage("home");
@@ -373,16 +666,7 @@ export default function App() {
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
     },
-    [currentPage, isSidePlayer, isTheaterMode, viewMode]
-  );
-
-  const handleSelectYouTubeVideo = useCallback(
-    (video) => {
-      setActiveCustomVideo(video);
-      setCurrentVideoId(video.id);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    },
-    []
+    [currentPage, isSidePlayer, isTheaterMode, viewMode, handleSelectYouTubeVideo]
   );
 
   const updateSidePlayerPrefs = useCallback((updater) => {
@@ -492,29 +776,36 @@ export default function App() {
     });
   }, []);
 
-  const handleRemoveFromHistory = useCallback((videoId) => {
-    if (!videoId) return;
-    setWatchProgress((prev) => {
-      const prevEntry = prev[videoId];
-      const updated = {
-        ...prev,
-        [videoId]: {
-          time: 0,
-          duration: prevEntry?.duration || 0,
-          completed: false,
-          watched: false,
-          hiddenFromHistory: true,
-          updatedAt: 0,
-          modifiedAt: Date.now()
-        }
-      };
-      writeJSON(STORAGE_KEY, updated);
-      syncStore.touchProgress();
-      return updated;
-    });
-  }, []);
+  const handleRemoveFromHistory = useCallback(
+    (videoId) => {
+      if (!videoId) return;
+      if (String(videoId).startsWith("yt_")) {
+        handleRemoveYouTubeHistoryItem(videoId);
+      }
+      setWatchProgress((prev) => {
+        const prevEntry = prev[videoId];
+        const updated = {
+          ...prev,
+          [videoId]: {
+            time: 0,
+            duration: prevEntry?.duration || 0,
+            completed: false,
+            watched: false,
+            hiddenFromHistory: true,
+            updatedAt: 0,
+            modifiedAt: Date.now()
+          }
+        };
+        writeJSON(STORAGE_KEY, updated);
+        syncStore.touchProgress();
+        return updated;
+      });
+    },
+    [handleRemoveYouTubeHistoryItem]
+  );
 
   const handleClearHistory = useCallback(() => {
+    handleClearYouTubeHistory("all");
     setWatchProgress((prev) => {
       // Every entry becomes a hidden tombstone (rather than being dropped) so the server copy,
       // which never deletes by omission, gets cleared too.
@@ -535,7 +826,7 @@ export default function App() {
       syncStore.touchProgress();
       return updated;
     });
-  }, []);
+  }, [handleClearYouTubeHistory]);
 
   const handleToggleFavorite = useCallback((videoId) => {
     if (!videoId) return;
@@ -666,7 +957,57 @@ export default function App() {
   const isPlayerHidden =
     currentPage !== "home" &&
     !isSidePlayer &&
-    !( (currentPage === "youtube" || currentPage === "shorts") && activeCustomVideo );
+    !((currentPage === "youtube" || currentPage === "shorts") && activeCustomVideo);
+
+  const shortsPosition = useMemo(() => {
+    if (
+      !currentVideo?.isShort ||
+      !activeYouTubePlaylist?.isShortsFeed ||
+      !Array.isArray(activeYouTubePlaylist.items) ||
+      activeYouTubePlaylist.items.length === 0
+    ) {
+      return null;
+    }
+    const rawId = String(currentVideo.ytId || currentVideo.id || "").replace(/^yt_/, "");
+    const idx = activeYouTubePlaylist.items.findIndex(
+      (item) => String(item.id || "").replace(/^yt_/, "") === rawId
+    );
+    return {
+      index: idx >= 0 ? idx : 0,
+      total: activeYouTubePlaylist.items.length,
+      feedTitle: activeYouTubePlaylist.title || "Shorts Feed"
+    };
+  }, [currentVideo, activeYouTubePlaylist]);
+
+  // Background prefetch the next 2 Shorts in the active queue so scrolling to the next Short is instant
+  useEffect(() => {
+    if (
+      !currentVideo?.isShort ||
+      !activeYouTubePlaylist?.isShortsFeed ||
+      !Array.isArray(activeYouTubePlaylist.items) ||
+      activeYouTubePlaylist.items.length < 2
+    ) {
+      return;
+    }
+    const items = activeYouTubePlaylist.items;
+    const rawId = String(currentVideo.ytId || currentVideo.id || "").replace(/^yt_/, "");
+    const idx = items.findIndex((item) => String(item.id || "").replace(/^yt_/, "") === rawId);
+    if (idx === -1) return;
+
+    const upcomingIds = [];
+    for (let offset = 1; offset <= 2; offset++) {
+      const nextItem = items[(idx + offset) % items.length];
+      const nextId = String(nextItem?.id || "").replace(/^yt_/, "");
+      if (nextId && nextId !== rawId && !upcomingIds.includes(nextId)) {
+        upcomingIds.push(nextId);
+      }
+    }
+    if (upcomingIds.length === 0) return;
+
+    fetch(`/api/youtube/prefetch?ids=${encodeURIComponent(upcomingIds.join(","))}&quality=480`).catch(
+      () => {}
+    );
+  }, [currentVideo?.id, currentVideo?.isShort, currentVideo?.ytId, activeYouTubePlaylist]);
 
   return (
     <div className={`app-shell view-mode-${viewMode}`}>
@@ -712,13 +1053,11 @@ export default function App() {
       />
 
       <main
-        className={`container ${viewMode === "mobile" ? "mobile-container" : ""} ${
-          currentPage !== "home"
+        className={`container ${viewMode === "mobile" ? "mobile-container" : ""} ${currentPage !== "home"
             ? "subpage-mode"
-            : `${isTheaterMode ? "theater-mode" : ""} ${
-                isSidePlayer ? "side-player-active" : ""
-              }`
-        }`}
+            : `${isTheaterMode ? "theater-mode" : ""} ${isSidePlayer ? "side-player-active" : ""
+            }`
+          }`}
       >
         {authNotification && (
           <div className="youtube-auth-notice-banner" role="alert">
@@ -752,7 +1091,15 @@ export default function App() {
           onUpdateSidePlayerPrefs={updateSidePlayerPrefs}
           viewMode={viewMode}
           onToggleTheater={toggleTheaterMode}
-          onClose={activeCustomVideo ? () => setActiveCustomVideo(null) : undefined}
+          shortsPosition={shortsPosition}
+          onClose={
+            activeCustomVideo
+              ? () => {
+                setActiveCustomVideo(null);
+                setActiveYouTubePlaylist(null);
+              }
+              : undefined
+          }
         />
 
         {currentPage === "home" && (
@@ -787,6 +1134,12 @@ export default function App() {
             onRemoveFromHistory={handleRemoveFromHistory}
             onClearHistory={handleClearHistory}
             onNavigateHome={() => setCurrentPage("home")}
+            youtubeHistorySync={youtubeHistorySync}
+            onSyncYouTubeHistory={handleSyncYouTubeHistory}
+            onOpenYouTubeHistorySync={() => {
+              setYoutubeInitialTab("recent");
+              setCurrentPage("youtube");
+            }}
           />
         )}
 
@@ -809,6 +1162,22 @@ export default function App() {
             favorites={favorites}
             onToggleFavorite={handleToggleFavorite}
             auth={auth}
+            initialTab={youtubeInitialTab}
+            onConsumeInitialTab={() => setYoutubeInitialTab(null)}
+            youtubeHistory={youtubeHistory}
+            youtubeHistorySync={youtubeHistorySync}
+            onSyncYouTubeHistory={handleSyncYouTubeHistory}
+            onImportYouTubeHistory={handleImportYouTubeHistory}
+            onSaveYouTubeCookies={handleSaveYouTubeCookies}
+            onClearYouTubeCookies={handleClearYouTubeCookies}
+            onRemoveYouTubeHistoryItem={handleRemoveYouTubeHistoryItem}
+            onClearYouTubeHistory={handleClearYouTubeHistory}
+            activePlaylist={activeYouTubePlaylist}
+            isPlaylistShuffled={isYouTubePlaylistShuffled}
+            onTogglePlaylistShuffle={() => setIsYouTubePlaylistShuffled((prev) => !prev)}
+            onClearActivePlaylist={() => setActiveYouTubePlaylist(null)}
+            onPrevPlaylistVideo={handlePrev}
+            onNextPlaylistVideo={handleNext}
           />
         )}
 
@@ -819,6 +1188,7 @@ export default function App() {
             favorites={favorites}
             onToggleFavorite={handleToggleFavorite}
             auth={auth}
+            youtubeHistory={youtubeHistory}
           />
         )}
 
@@ -838,6 +1208,34 @@ export default function App() {
         <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
           <button
             type="button"
+            className={`mobile-nav-item ${currentPage === "youtube" ? "active" : ""}`}
+            onClick={() => setCurrentPage("youtube")}
+          >
+            <span className="mobile-nav-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "youtube" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z" />
+                <polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02" fill="currentColor" />
+              </svg>
+            </span>
+            <span className="mobile-nav-label">YouTube</span>
+          </button>
+
+          <button
+            type="button"
+            className={`mobile-nav-item ${currentPage === "shorts" ? "active" : ""}`}
+            onClick={() => setCurrentPage("shorts")}
+          >
+            <span className="mobile-nav-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "shorts" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="5" y="2" width="14" height="20" rx="3" />
+                <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" />
+              </svg>
+            </span>
+            <span className="mobile-nav-label">Shorts</span>
+          </button>
+
+          <button
+            type="button"
             className={`mobile-nav-item ${currentPage === "home" ? "active" : ""}`}
             onClick={() => setCurrentPage("home")}
           >
@@ -846,7 +1244,7 @@ export default function App() {
                 <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1V9.5z" />
               </svg>
             </span>
-            <span className="mobile-nav-label">Home</span>
+            <span className="mobile-nav-label">Library</span>
           </button>
 
           <button
@@ -881,34 +1279,6 @@ export default function App() {
               )}
             </span>
             <span className="mobile-nav-label">Favorites</span>
-          </button>
-
-          <button
-            type="button"
-            className={`mobile-nav-item ${currentPage === "youtube" ? "active" : ""}`}
-            onClick={() => setCurrentPage("youtube")}
-          >
-            <span className="mobile-nav-icon" aria-hidden="true">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "youtube" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z" />
-                <polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02" fill="currentColor" />
-              </svg>
-            </span>
-            <span className="mobile-nav-label">YouTube</span>
-          </button>
-
-          <button
-            type="button"
-            className={`mobile-nav-item ${currentPage === "shorts" ? "active" : ""}`}
-            onClick={() => setCurrentPage("shorts")}
-          >
-            <span className="mobile-nav-icon" aria-hidden="true">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "shorts" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="5" y="2" width="14" height="20" rx="3" />
-                <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" />
-              </svg>
-            </span>
-            <span className="mobile-nav-label">Shorts</span>
           </button>
 
           <button

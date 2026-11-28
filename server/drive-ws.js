@@ -70,6 +70,8 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
     const initialSpeed = parseFloat(params.get("speed") || "1") || 1;
     const initialLoop =
       params.get("loop") === "1" || params.get("loop") === "true";
+    const isShort =
+      params.get("short") === "1" || params.get("short") === "true";
     // "source" (default) or a number; the output rate is resolved per stream (resolveOutputFps).
     let requestedFps = normalizeFpsRequest(params.get("fps"));
 
@@ -277,6 +279,7 @@ export function attachDriveWebSocketServer(httpServer, videosDir) {
             audioInput: ytStreams.audioUrl,
             httpHeaders: formatFfmpegHeaders(ytStreams.headers),
             isNetwork: true,
+            isShort,
             seek: currentSeek,
             speed: spd,
             quality: currentQuality,

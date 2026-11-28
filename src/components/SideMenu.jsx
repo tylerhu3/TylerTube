@@ -75,11 +75,11 @@ export default function SideMenu({
           </button>
           <div
             className="brand clickable-brand"
-            onClick={() => handleSelectPage("home")}
+            onClick={() => handleSelectPage("youtube")}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") handleSelectPage("home");
+              if (e.key === "Enter" || e.key === " ") handleSelectPage("youtube");
             }}
           >
             <span className="brand-icon" aria-hidden="true">
@@ -144,6 +144,34 @@ export default function SideMenu({
           <div className="side-menu-section">
             <button
               type="button"
+              className={`side-menu-item ${currentPage === "youtube" ? "active" : ""}`}
+              onClick={() => handleSelectPage("youtube")}
+            >
+              <span className="side-menu-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "youtube" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z" />
+                  <polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02" fill="currentColor" />
+                </svg>
+              </span>
+              <span className="side-menu-label">YouTube</span>
+            </button>
+
+            <button
+              type="button"
+              className={`side-menu-item ${currentPage === "shorts" ? "active" : ""}`}
+              onClick={() => handleSelectPage("shorts")}
+            >
+              <span className="side-menu-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "shorts" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="5" y="2" width="14" height="20" rx="3" />
+                  <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" />
+                </svg>
+              </span>
+              <span className="side-menu-label">Shorts</span>
+            </button>
+
+            <button
+              type="button"
               className={`side-menu-item ${currentPage === "home" ? "active" : ""}`}
               onClick={() => handleSelectPage("home")}
             >
@@ -152,7 +180,7 @@ export default function SideMenu({
                   <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1V9.5z" />
                 </svg>
               </span>
-              <span className="side-menu-label">Home</span>
+              <span className="side-menu-label">Library</span>
               <span className="side-menu-badge">{totalVideosCount}</span>
             </button>
 
@@ -188,34 +216,6 @@ export default function SideMenu({
               {favoritesCount > 0 && (
                 <span className="side-menu-badge">{favoritesCount}</span>
               )}
-            </button>
-
-            <button
-              type="button"
-              className={`side-menu-item ${currentPage === "youtube" ? "active" : ""}`}
-              onClick={() => handleSelectPage("youtube")}
-            >
-              <span className="side-menu-icon" aria-hidden="true">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "youtube" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z" />
-                  <polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02" fill="currentColor" />
-                </svg>
-              </span>
-              <span className="side-menu-label">YouTube</span>
-            </button>
-
-            <button
-              type="button"
-              className={`side-menu-item ${currentPage === "shorts" ? "active" : ""}`}
-              onClick={() => handleSelectPage("shorts")}
-            >
-              <span className="side-menu-icon" aria-hidden="true">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill={currentPage === "shorts" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="5" y="2" width="14" height="20" rx="3" />
-                  <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" />
-                </svg>
-              </span>
-              <span className="side-menu-label">Shorts</span>
             </button>
 
             {auth?.authenticated && (

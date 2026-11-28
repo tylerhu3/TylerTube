@@ -15,6 +15,7 @@ import { createUploadHandler, defaultUploadKey, signatureCatalogStatus } from ".
 import { createUploadStore } from "./upload-store.js";
 import { DEFAULT_UPLOAD_LOG_FILE, createUploadLog } from "./upload-log.js";
 import { createYouTubeHandler } from "./youtube.js";
+import { createYouTubeHistoryStore } from "./youtube-history.js";
 import { createAuthStore, createAuthHandler } from "./auth.js";
 
 export const DEFAULT_DRIVE_PORT = 5180;
@@ -29,6 +30,10 @@ export const DEFAULT_STATE_FILE = fileURLToPath(new URL("../data/user-state.json
 export const DEFAULT_VISITORS_FILE = fileURLToPath(new URL("../data/visitors.json", import.meta.url));
 // Gitignored. Override with TYLERTUBE_AUTH_FILE.
 export const DEFAULT_AUTH_FILE = fileURLToPath(new URL("../data/auth-tokens.json", import.meta.url));
+// Gitignored. Override with TYLERTUBE_YOUTUBE_HISTORY_FILE.
+export const DEFAULT_YOUTUBE_HISTORY_FILE = fileURLToPath(
+  new URL("../data/youtube-history.json", import.meta.url)
+);
 // Gitignored. Override with TYLERTUBE_UPLOAD_LOG_FILE.
 export { DEFAULT_UPLOAD_LOG_FILE };
 
@@ -45,6 +50,7 @@ export function startDriveServer({
   stateFile = process.env.TYLERTUBE_STATE_FILE || DEFAULT_STATE_FILE,
   visitorsFile = process.env.TYLERTUBE_VISITORS_FILE || DEFAULT_VISITORS_FILE,
   authFile = process.env.TYLERTUBE_AUTH_FILE || DEFAULT_AUTH_FILE,
+  youtubeHistoryFile = process.env.TYLERTUBE_YOUTUBE_HISTORY_FILE || DEFAULT_YOUTUBE_HISTORY_FILE,
   uploadLogFile = process.env.TYLERTUBE_UPLOAD_LOG_FILE || DEFAULT_UPLOAD_LOG_FILE,
   geolocate = defaultGeolocate(),
   getUploadKey = defaultUploadKey(),
@@ -67,7 +73,8 @@ export function startDriveServer({
     uploadLog,
     catalogStatus: signatureCatalogStatus(videosDir)
   });
-  const handleYouTube = createYouTubeHandler({ authStore });
+  const historyStore = createYouTubeHistoryStore(youtubeHistoryFile);
+  const handleYouTube = createYouTubeHandler({ authStore, historyStore });
 
   const server = http.createServer(async (req, res) => {
     const [pathname] = (req.url || "").split("?");

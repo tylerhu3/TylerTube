@@ -231,6 +231,20 @@ test("buildWebCodecsFfmpegArgs: dual network inputs get symmetric -ss, headers, 
   assert.ok(args.includes("-reconnect"));
   assert.equal(args[args.indexOf("-map") + 1], "0:v:0");
   assert.equal(args[args.indexOf("-map", args.indexOf("-map") + 1) + 1], "1:a:0");
+
+  // Shorts fast-start mode uses superfast preset, tighter probe limits, and 1s GOP
+  const shortArgs = buildWebCodecsFfmpegArgs({
+    input: "https://cdn/short.webm",
+    isNetwork: true,
+    isShort: true,
+    quality: 480,
+    fps: 30,
+    hasAudio: true
+  });
+  assert.equal(shortArgs[shortArgs.indexOf("-preset") + 1], "superfast");
+  assert.equal(shortArgs[shortArgs.indexOf("-probesize") + 1], "32768");
+  assert.equal(shortArgs[shortArgs.indexOf("-analyzeduration") + 1], "250000");
+  assert.equal(shortArgs[shortArgs.indexOf("-g") + 1], "30");
 });
 
 test("selectDueFrame picks the newest due frame; -1 when all are in the future", () => {

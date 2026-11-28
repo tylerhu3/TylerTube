@@ -541,3 +541,43 @@
     margin-bottom: 0.5rem;
 }
 
+
+/* YouTube Watch History integration in HistoryPage */
+.history-source-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.12rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.history-source-badge.is-youtube {
+    background: rgba(255, 0, 0, 0.12);
+    color: #ef4444;
+}
+
+.history-source-badge.is-tylertube {
+    background: var(--accent-glow);
+    color: var(--accent);
+}
+
+.history-yt-sync-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.history-yt-sync-msg {
+    font-size: 0.78rem;
+    margin: 0.15rem 0 0;
+}
+
+.history-yt-sync-msg.is-success {
+    color: #16a34a;
+}
+
+.history-yt-sync-msg.is-error {
+    color: #ef4444;
+}

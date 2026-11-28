@@ -2,13 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   extractYouTubeVideoId,
+  extractYouTubePlaylistId,
   isYouTubeTarget,
   findYtDlpBinary,
   createYouTubeHandler,
   extractUrlExpireMs,
   formatFfmpegHeaders,
-  selectYouTubeStreams
+  selectYouTubeStreams,
+  extractHistorySeedCreators
 } from "../server/youtube.js";
+import {
+  parseIso8601Duration,
+  channelIdToShortsPlaylistId
+} from "../server/youtube-feed.js";
 
 test("extractYouTubeVideoId: parses various YouTube formats", () => {
   const expected = "dQw4w9WgXcQ";
@@ -279,4 +285,183 @@ test("selectYouTubeStreams: prefers direct HTTPS vp9 > avc1 > av01 and opus audi
   );
   assert.equal(hlsOnly.videoUrl, "https://cdn/live.m3u8");
   assert.equal(hlsOnly.isDirect, false);
+});
+
+test("extractYouTubePlaylistId: parses playlist URLs, watch+list URLs, and bare IDs", () => {
+  const plId = "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf";
+
+  assert.equal(
+    extractYouTubePlaylistId(`https://www.youtube.com/playlist?list=${plId}`),
+    plId
+  );
+  assert.equal(
+    extractYouTubePlaylistId(`https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=${plId}&index=2`),
+    plId
+  );
+  assert.equal(
+    extractYouTubePlaylistId(`https://youtu.be/dQw4w9WgXcQ?list=${plId}`),
+    plId
+  );
+  assert.equal(
+    extractYouTubePlaylistId(`https://music.youtube.com/playlist?list=${plId}`),
+    plId
+  );
+  assert.equal(extractYouTubePlaylistId(`ytpl:${plId}`), plId);
+  assert.equal(extractYouTubePlaylistId(plId), plId);
+  assert.equal(extractYouTubePlaylistId("LL"), "LL");
+
+  // Invalid or non-playlist inputs
+  assert.equal(extractYouTubePlaylistId(""), null);
+  assert.equal(extractYouTubePlaylistId(null), null);
+  assert.equal(extractYouTubePlaylistId("dQw4w9WgXcQ"), null);
+  assert.equal(extractYouTubePlaylistId("lofi hip hop radio"), null);
+  assert.equal(extractYouTubePlaylistId("https://example.com/playlist?list=" + plId), null);
+});
+
+test("createYouTubeHandler: /api/youtube/playlist and /api/youtube/playlists validation", async () => {
+  const handler = createYouTubeHandler();
+
+  let status = 0;
+  let body = "";
+  const makeRes = () => ({
+    writeHead(s) {
+      status = s;
+    },
+    end(b) {
+      body = b;
+    }
+  });
+
+  // Missing or invalid playlist ID -> 400
+  assert.equal(
+    await handler({ url: "/api/youtube/playlist?list=not-a-playlist", method: "GET" }, makeRes()),
+    true
+  );
+  assert.equal(status, 400);
+
+  // /api/youtube/playlists without authStore -> 401 AUTH_DISABLED
+  assert.equal(
+    await handler({ url: "/api/youtube/playlists", method: "GET" }, makeRes()),
+    true
+  );
+  assert.equal(status, 401);
+  assert.equal(JSON.parse(body).code, "AUTH_DISABLED");
+});
+
+test("selectYouTubeStreams: handles vertical 9:16 Shorts by short edge", () => {
+  const verticalFormats = [
+    {
+      protocol: "https",
+      url: "https://cdn/v-360",
+      vcodec: "vp9",
+      acodec: "none",
+      width: 360,
+      height: 640,
+      fps: 30,
+      tbr: 500
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/v-480",
+      vcodec: "vp9",
+      acodec: "none",
+      width: 480,
+      height: 854,
+      fps: 30,
+      tbr: 900
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/v-720",
+      vcodec: "vp9",
+      acodec: "none",
+      width: 720,
+      height: 1280,
+      fps: 60,
+      tbr: 1800
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/v-1080",
+      vcodec: "vp9",
+      acodec: "none",
+      width: 1080,
+      height: 1920,
+      fps: 60,
+      tbr: 3200
+    },
+    {
+      protocol: "https",
+      url: "https://cdn/a-opus",
+      vcodec: "none",
+      acodec: "opus",
+      abr: 128
+    }
+  ];
+
+  // 480p quality picks 480x854 (short edge = 480) instead of dropping to 360x640
+  assert.equal(selectYouTubeStreams(verticalFormats, 480).videoUrl, "https://cdn/v-480");
+  // 720p quality picks 720x1280 (short edge = 720) instead of dropping to 360x640
+  assert.equal(selectYouTubeStreams(verticalFormats, 720).videoUrl, "https://cdn/v-720");
+  // 1080p quality picks 1080x1920
+  assert.equal(selectYouTubeStreams(verticalFormats, 1080).videoUrl, "https://cdn/v-1080");
+});
+
+test("parseIso8601Duration and channelIdToShortsPlaylistId", () => {
+  assert.equal(parseIso8601Duration("PT45S"), 45);
+  assert.equal(parseIso8601Duration("PT1M15S"), 75);
+  assert.equal(parseIso8601Duration("PT1H2M3S"), 3723);
+  assert.equal(parseIso8601Duration("PT2M"), 120);
+  assert.equal(parseIso8601Duration(""), 0);
+  assert.equal(parseIso8601Duration("invalid"), 0);
+
+  assert.equal(channelIdToShortsPlaylistId("UC_x5XG1OV2P6uZZ5FSM9Ttw"), "UUSH_x5XG1OV2P6uZZ5FSM9Ttw");
+  assert.equal(channelIdToShortsPlaylistId("PL123"), null);
+  assert.equal(channelIdToShortsPlaylistId(""), null);
+});
+
+test("extractHistorySeedCreators ranks creators with recency and short-video boost", () => {
+  const history = [
+    { id: "aaaaaaaaaaa", author: "YouTube", duration: 30 },
+    { id: "bbbbbbbbbbb", author: "Veritasium", duration: 45 },
+    { id: "ccccccccccc", author: "Marques Brownlee", duration: 600 },
+    { id: "ddddddddddd", author: "Veritasium", duration: 55 },
+    { id: "eeeeeeeeeee", author: "Fireship", duration: 100 }
+  ];
+  const creators = extractHistorySeedCreators(history, 3);
+  assert.equal(creators[0], "Veritasium");
+  assert.ok(creators.includes("Fireship"));
+  assert.ok(!creators.includes("YouTube"));
+});
+
+test("createYouTubeHandler: /api/youtube/prefetch and /api/youtube/shorts/tailored", async () => {
+  const handler = createYouTubeHandler();
+  let status = 0;
+  let body = "";
+  const makeRes = () => ({
+    writeHead(s) {
+      status = s;
+    },
+    end(b) {
+      body = b;
+    }
+  });
+
+  // Prefetch with empty / invalid IDs returns 202 with empty queued list (no yt-dlp spawned)
+  assert.equal(
+    await handler({ url: "/api/youtube/prefetch?ids=invalid,bad", method: "GET" }, makeRes()),
+    true
+  );
+  assert.equal(status, 202);
+  assert.deepEqual(JSON.parse(body), { queued: [] });
+
+  // Tailored shorts without auth or history returns 200 with tailored: false
+  assert.equal(
+    await handler({ url: "/api/youtube/shorts/tailored?limit=12", method: "GET" }, makeRes()),
+    true
+  );
+  assert.equal(status, 200);
+  const tailoredData = JSON.parse(body);
+  assert.equal(tailoredData.tailored, false);
+  assert.deepEqual(tailoredData.items, []);
 });

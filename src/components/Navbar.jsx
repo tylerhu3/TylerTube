@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { COLOR_THEMES } from "../data/themeColors";
 import { getGoogleLoginUrl } from "../lib/auth";
 
-const PAGE_LABELS = { history: "History", favorites: "Favorites", upload: "Upload", youtube: "YouTube", shorts: "Shorts" };
+const PAGE_LABELS = { home: "Library", history: "History", favorites: "Favorites", upload: "Upload", youtube: "YouTube", shorts: "Shorts" };
 
 export default function Navbar({
   searchQuery,
@@ -17,7 +17,7 @@ export default function Navbar({
   colorTheme = "pink",
   onColorThemeChange,
   onToggleMenu,
-  currentPage = "home",
+  currentPage = "youtube",
   onNavigate,
   auth = null,
   onLogout
@@ -102,12 +102,12 @@ export default function Navbar({
 
           <div
             className="brand clickable-brand"
-            onClick={() => onNavigate?.("home")}
+            onClick={() => onNavigate?.("youtube")}
             role="button"
             tabIndex={0}
-            title="Go to TylerTube Home"
+            title="Go to TylerTube YouTube"
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") onNavigate?.("home");
+              if (e.key === "Enter" || e.key === " ") onNavigate?.("youtube");
             }}
           >
             <span className="brand-icon" aria-hidden="true">
@@ -118,7 +118,7 @@ export default function Navbar({
             <h1>TylerTube</h1>
           </div>
 
-          {currentPage !== "home" && (
+          {currentPage !== "youtube" && (
             <div className="nav-page-indicator">
               <span className="nav-page-divider">/</span>
               <span className="nav-page-name">

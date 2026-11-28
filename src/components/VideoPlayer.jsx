@@ -66,23 +66,139 @@ export default function VideoPlayer({
   onUpdateSidePlayerPrefs,
   viewMode = "desktop",
   onToggleTheater,
-  onClose
+  onClose,
+  shortsPosition = null
 }) {
   // Exact last position reported by the WebCodecs player ({ videoId, time }) so re-showing
   // after hiding resumes at sub-second precision.
   const positionRef = useRef({ videoId: null, time: 0 });
   const canvasPlayerRef = useRef(null);
   const sectionRef = useRef(null);
+  const shortsStageRef = useRef(null);
   const savedTimeRef = useRef(savedTime);
   savedTimeRef.current = savedTime;
+  const onNextRef = useRef(onNext);
+  const onPrevRef = useRef(onPrev);
+  onNextRef.current = onNext;
+  onPrevRef.current = onPrev;
   const [resumedBannerTime, setResumedBannerTime] = useState(0);
   const [isInteracting, setIsInteracting] = useState(false);
+  const [autoNextShort, setAutoNextShort] = useState(false);
+  const [shortSlideDir, setShortSlideDir] = useState("");
   const dragStateRef = useRef(null);
+  const wheelStateRef = useRef({ accum: 0, lockedUntil: 0, resetTimer: null });
+  const touchSwipeRef = useRef(null);
+  const slideTimerRef = useRef(null);
+
+  const isShortsMode = Boolean(video?.isShort && !isSidePlayer && !isHidden);
+
+  const triggerShortNav = (direction) => {
+    setShortSlideDir(direction);
+    if (slideTimerRef.current) clearTimeout(slideTimerRef.current);
+    slideTimerRef.current = setTimeout(() => setShortSlideDir(""), 260);
+    if (direction === "next") onNextRef.current?.();
+    else onPrevRef.current?.();
+  };
 
   useEffect(() => {
     const initialSavedTime = Number(savedTimeRef.current) || 0;
     setResumedBannerTime(initialSavedTime > 0 ? initialSavedTime : 0);
   }, [video?.id]);
+
+  // Mouse wheel / trackpad scroll-to-next-short on the Shorts stage (non-passive so page stays anchored)
+  useEffect(() => {
+    if (!isShortsMode) return;
+    const el = shortsStageRef.current;
+    if (!el) return;
+
+    const handleWheel = (e) => {
+      if (e.target?.closest?.(".yt-settings-menu")) return;
+      e.preventDefault();
+      const now = Date.now();
+      const ws = wheelStateRef.current;
+      if (now < ws.lockedUntil) return;
+
+      ws.accum += e.deltaY;
+      if (ws.resetTimer) clearTimeout(ws.resetTimer);
+      ws.resetTimer = setTimeout(() => {
+        ws.accum = 0;
+      }, 180);
+
+      if (ws.accum >= 55) {
+        ws.accum = 0;
+        ws.lockedUntil = now + 550;
+        triggerShortNav("next");
+      } else if (ws.accum <= -55) {
+        ws.accum = 0;
+        ws.lockedUntil = now + 550;
+        triggerShortNav("prev");
+      }
+    };
+
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", handleWheel);
+      if (wheelStateRef.current.resetTimer) {
+        clearTimeout(wheelStateRef.current.resetTimer);
+        wheelStateRef.current.resetTimer = null;
+      }
+    };
+  }, [isShortsMode]);
+
+  // ArrowUp / ArrowDown keyboard navigation while watching Shorts
+  useEffect(() => {
+    if (!isShortsMode) return;
+    const handleKeyDown = (e) => {
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        triggerShortNav("next");
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        triggerShortNav("prev");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isShortsMode]);
+
+  useEffect(() => {
+    return () => {
+      if (slideTimerRef.current) clearTimeout(slideTimerRef.current);
+    };
+  }, []);
+
+  const handleShortsTouchStart = (e) => {
+    if (!isShortsMode || e.touches.length !== 1) return;
+    if (e.target?.closest?.(".yt-bottom, button, input, a, .yt-settings-menu")) return;
+    const t = e.touches[0];
+    touchSwipeRef.current = { x: t.clientX, y: t.clientY, time: Date.now() };
+  };
+
+  const handleShortsTouchEnd = (e) => {
+    const start = touchSwipeRef.current;
+    touchSwipeRef.current = null;
+    if (!start || !isShortsMode || e.changedTouches.length === 0) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    const dt = Date.now() - start.time;
+    if (dt > 700) return;
+    if (Math.abs(dy) >= 50 && Math.abs(dy) > Math.abs(dx) * 1.2) {
+      if (dy < 0) triggerShortNav("next");
+      else triggerShortNav("prev");
+    }
+  };
+
+  const handlePlayerEnded = () => {
+    if (video?.isShort && !autoNextShort) {
+      canvasPlayerRef.current?.seekTo(0);
+      return;
+    }
+    onEnded?.();
+  };
 
   const handleRestartFromBeginning = () => {
     canvasPlayerRef.current?.seekTo(0);
@@ -274,7 +390,9 @@ export default function VideoPlayer({
       ref={sectionRef}
       className={`player-section ${isSidePlayer ? "floating-player" : ""} ${
         isSidePlayer ? `dock-${side} dock-${vertical}` : ""
-      } ${isInteracting ? "is-interacting" : ""} ${isHidden ? "player-hidden" : ""}`}
+      } ${isInteracting ? "is-interacting" : ""} ${isHidden ? "player-hidden" : ""} ${
+        isShortsMode ? "shorts-player-mode" : ""
+      }`}
       style={floatingStyle}
     >
       {isSidePlayer && (
@@ -415,17 +533,98 @@ export default function VideoPlayer({
         </>
       )}
 
-      <div className="video-wrapper drive-mode-wrapper">
-        <WebCodecsPlayer
-          ref={canvasPlayerRef}
-          video={video}
-          savedTime={savedTime}
-          getStartTime={getCanvasStartTime}
-          onTimeUpdate={handleCanvasTimeUpdate}
-          onEnded={onEnded}
-          isHidden={isHidden}
-          onToggleTheater={onToggleTheater}
-        />
+      <div
+        ref={shortsStageRef}
+        className={isShortsMode ? "shorts-stage-layout" : undefined}
+        onTouchStart={isShortsMode ? handleShortsTouchStart : undefined}
+        onTouchEnd={isShortsMode ? handleShortsTouchEnd : undefined}
+      >
+        <div
+          className={`video-wrapper drive-mode-wrapper ${
+            isShortsMode ? "shorts-video-wrapper" : ""
+          } ${shortSlideDir ? `shorts-slide-${shortSlideDir}` : ""}`}
+        >
+          <WebCodecsPlayer
+            ref={canvasPlayerRef}
+            video={video}
+            savedTime={savedTime}
+            getStartTime={getCanvasStartTime}
+            onTimeUpdate={handleCanvasTimeUpdate}
+            onEnded={handlePlayerEnded}
+            isHidden={isHidden}
+            onToggleTheater={onToggleTheater}
+          />
+        </div>
+
+        {isShortsMode && (
+          <div className="shorts-side-rail" aria-label="Shorts navigation">
+            <button
+              type="button"
+              className="shorts-rail-btn"
+              onClick={() => triggerShortNav("prev")}
+              title="Previous Short (Scroll Up / ↑)"
+              aria-label="Previous Short"
+            >
+              ⬆
+            </button>
+            {shortsPosition && shortsPosition.total > 0 && (
+              <span className="shorts-rail-counter" title={shortsPosition.feedTitle || "Shorts Queue"}>
+                {shortsPosition.index + 1} / {shortsPosition.total}
+              </span>
+            )}
+            <button
+              type="button"
+              className="shorts-rail-btn primary"
+              onClick={() => triggerShortNav("next")}
+              title="Next Short (Scroll Down / ↓)"
+              aria-label="Next Short"
+            >
+              ⬇
+            </button>
+
+            <div className="shorts-rail-divider" />
+
+            {video?.id && onToggleFavorite && (
+              <button
+                type="button"
+                className={`shorts-rail-btn ${isFavorited ? "favorited" : ""}`}
+                onClick={() => onToggleFavorite(video.id)}
+                title={isFavorited ? "Remove from Favorites" : "Add to Favorites"}
+                aria-label="Toggle favorite"
+              >
+                {isFavorited ? "♥" : "♡"}
+              </button>
+            )}
+
+            <button
+              type="button"
+              className={`shorts-rail-btn ${autoNextShort ? "active" : ""}`}
+              onClick={() => setAutoNextShort((prev) => !prev)}
+              title={
+                autoNextShort
+                  ? "Auto-Next is ON (advances when Short ends)"
+                  : "Loop is ON (repeats Short until you scroll)"
+              }
+              aria-label="Toggle auto-next or loop"
+            >
+              {autoNextShort ? "⏭" : "🔁"}
+            </button>
+
+            {onClose && (
+              <button
+                type="button"
+                className="shorts-rail-btn"
+                onClick={onClose}
+                title="Close Shorts Player"
+                aria-label="Close Shorts Player"
+              >
+                ✕
+              </button>
+            )}
+
+            <span className="shorts-rail-hint">Scroll / Swipe / ↑↓</span>
+          </div>
+        )}
       </div>
 
       <div className="player-bar">

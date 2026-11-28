@@ -13,6 +13,7 @@ import { createUploadHandler } from "./upload.js";
 import { createUploadStore } from "./upload-store.js";
 import { createUploadLog } from "./upload-log.js";
 import { createYouTubeHandler } from "./youtube.js";
+import { createYouTubeHistoryStore } from "./youtube-history.js";
 import { createAuthStore, createAuthHandler } from "./auth.js";
 
 // Dev/preview keep their own state file so testing never touches production history.
@@ -45,6 +46,11 @@ function devUploadHandler(videosDir, authStore) {
     },
     uploadLog: createUploadLog(logFile)
   });
+}
+
+function devYouTubeHistoryStore() {
+  const file = path.resolve(process.cwd(), "data/youtube-history.dev.json");
+  return createYouTubeHistoryStore(file);
 }
 
 export function videoCatalogPlugin() {
@@ -120,7 +126,9 @@ export function videoCatalogPlugin() {
       server.middlewares.use(devUserStateHandler(authStore));
       server.middlewares.use(devVisitorsHandler());
       server.middlewares.use(devUploadHandler(videosDir, authStore));
-      server.middlewares.use(createYouTubeHandler({ authStore }));
+      server.middlewares.use(
+        createYouTubeHandler({ authStore, historyStore: devYouTubeHistoryStore() })
+      );
       attachDriveWebSocketServer(server.httpServer, videosDir);
       server.watcher.add(videosDir);
       const reloadCatalog = (filePath) => {
@@ -152,7 +160,9 @@ export function videoCatalogPlugin() {
       server.middlewares.use(devUserStateHandler(authStore));
       server.middlewares.use(devVisitorsHandler());
       server.middlewares.use(devUploadHandler(videosDir, authStore));
-      server.middlewares.use(createYouTubeHandler({ authStore }));
+      server.middlewares.use(
+        createYouTubeHandler({ authStore, historyStore: devYouTubeHistoryStore() })
+      );
       attachDriveWebSocketServer(server.httpServer, videosDir);
     }
   };

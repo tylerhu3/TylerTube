@@ -314,3 +314,159 @@
     opacity: 0.7;
 }
 
+/* =========================================================
+   Vertical Shorts Player Stage (Scroll / Swipe / ↑↓)
+   ========================================================= */
+.player-section.shorts-player-mode {
+    margin-bottom: 1.5rem;
+}
+
+.shorts-stage-layout {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.15rem;
+    padding: 0.5rem 0;
+    touch-action: pan-x;
+    overscroll-behavior: contain;
+}
+
+.video-wrapper.shorts-video-wrapper {
+    width: min(410px, calc(100vw - 88px));
+    max-height: 76vh;
+    aspect-ratio: 9 / 16;
+    flex-shrink: 0;
+    border-radius: 16px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+    will-change: transform;
+}
+
+@keyframes shorts-slide-next-anim {
+    from {
+        transform: translateY(22px);
+        opacity: 0.85;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes shorts-slide-prev-anim {
+    from {
+        transform: translateY(-22px);
+        opacity: 0.85;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.video-wrapper.shorts-video-wrapper.shorts-slide-next {
+    animation: shorts-slide-next-anim 0.22s ease-out;
+}
+
+.video-wrapper.shorts-video-wrapper.shorts-slide-prev {
+    animation: shorts-slide-prev-anim 0.22s ease-out;
+}
+
+.shorts-side-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.55rem;
+    flex-shrink: 0;
+}
+
+.shorts-rail-btn {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-main);
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.shorts-rail-btn:hover {
+    border-color: var(--accent);
+    background: var(--bg-surface-hover);
+    transform: scale(1.06);
+}
+
+.shorts-rail-btn:active {
+    transform: scale(0.95);
+}
+
+.shorts-rail-btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #ffffff;
+}
+
+.shorts-rail-btn.primary:hover {
+    filter: brightness(1.1);
+}
+
+.shorts-rail-btn.favorited {
+    color: #ff4d4f;
+    border-color: rgba(255, 77, 79, 0.45);
+}
+
+.shorts-rail-btn.active {
+    background: var(--active-btn-bg);
+    border-color: var(--active-btn-bg);
+    color: var(--active-btn-text);
+}
+
+.shorts-rail-counter {
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    padding: 0.1rem 0.35rem;
+}
+
+.shorts-rail-divider {
+    width: 24px;
+    height: 1px;
+    background: var(--border);
+    margin: 0.15rem 0;
+}
+
+.shorts-rail-hint {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-align: center;
+    max-width: 72px;
+    line-height: 1.25;
+    margin-top: 0.25rem;
+}
+
+@media (max-width: 640px) {
+    .shorts-stage-layout {
+        gap: 0.55rem;
+    }
+    .video-wrapper.shorts-video-wrapper {
+        width: min(340px, calc(100vw - 74px));
+        max-height: 70vh;
+    }
+    .shorts-rail-btn {
+        width: 40px;
+        height: 40px;
+        font-size: 0.95rem;
+    }
+    .shorts-rail-hint {
+        display: none;
+    }
+}
+

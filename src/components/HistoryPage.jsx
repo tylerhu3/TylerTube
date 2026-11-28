@@ -39,13 +39,19 @@ export default function HistoryPage({
   onToggleFavorite,
   onRemoveFromHistory,
   onClearHistory,
-  onNavigateHome
+  onNavigateHome,
+  youtubeHistorySync = null,
+  onSyncYouTubeHistory,
+  onOpenYouTubeHistorySync
 }) {
   const [historySearch, setHistorySearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [sourceFilter, setSourceFilter] = useState("ALL"); // "ALL" | "LIBRARY" | "YOUTUBE"
   const [courseFilter, setCourseFilter] = useState("ALL");
   const [confirmClear, setConfirmClear] = useState(false);
   const [failedPosters, setFailedPosters] = useState({});
+  const [syncingYouTube, setSyncingYouTube] = useState(false);
+  const [syncMessage, setSyncMessage] = useState(null);
 
   const courses = useMemo(() => {
     const set = new Set();
@@ -55,9 +61,21 @@ export default function HistoryPage({
     return Array.from(set);
   }, [historyItems]);
 
+  const { libraryCount, youtubeCount } = useMemo(() => {
+    let lib = 0;
+    let yt = 0;
+    for (const item of historyItems) {
+      if (item.video.isYouTube) yt++;
+      else lib++;
+    }
+    return { libraryCount: lib, youtubeCount: yt };
+  }, [historyItems]);
+
   const filteredItems = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
     return historyItems.filter(({ video, progress }) => {
+      if (sourceFilter === "LIBRARY" && video.isYouTube) return false;
+      if (sourceFilter === "YOUTUBE" && !video.isYouTube) return false;
       if (courseFilter !== "ALL" && video.course !== courseFilter) return false;
       const isCompleted = Boolean(
         progress?.completed ||
@@ -73,7 +91,28 @@ export default function HistoryPage({
         (video.section && video.section.toLowerCase().includes(q))
       );
     });
-  }, [historyItems, historySearch, statusFilter, courseFilter]);
+  }, [historyItems, historySearch, statusFilter, sourceFilter, courseFilter]);
+
+  const handleQuickSyncYouTube = async () => {
+    if (!onSyncYouTubeHistory) return;
+    setSyncingYouTube(true);
+    setSyncMessage(null);
+    try {
+      const res = await onSyncYouTubeHistory();
+      const count = res?.syncedCount ?? res?.items?.length ?? 0;
+      setSyncMessage({
+        type: "success",
+        text: `Synced ${count} videos from YouTube`
+      });
+    } catch (err) {
+      setSyncMessage({
+        type: "error",
+        text: err.message || "Failed to sync YouTube history"
+      });
+    } finally {
+      setSyncingYouTube(false);
+    }
+  };
 
   const groupedItems = useMemo(() => {
     const groups = [];
@@ -120,7 +159,7 @@ export default function HistoryPage({
             </span>
           </div>
           <p className="subpage-subtitle">
-            Videos you have watched or started watching across your library
+            Videos you have watched across your library, TylerTube, and YouTube
           </p>
         </div>
 
@@ -155,6 +194,7 @@ export default function HistoryPage({
               onClick={() => {
                 setHistorySearch("");
                 setStatusFilter("ALL");
+                setSourceFilter("ALL");
                 setCourseFilter("ALL");
               }}
             >
@@ -283,12 +323,21 @@ export default function HistoryPage({
                           </div>
 
                           <div className="history-card-meta">
-                            {video.course && (
+                            {video.isYouTube && (
+                              <span
+                                className={`history-source-badge ${
+                                  video.historySource === "youtube" ? "is-youtube" : "is-tylertube"
+                                }`}
+                              >
+                                {video.historySource === "youtube" ? "YouTube" : "TylerTube YT"}
+                              </span>
+                            )}
+                            {video.course && !video.isYouTube && (
                               <span className="meta-course">{video.course}</span>
                             )}
                             {video.section && video.section !== "Main" && (
                               <>
-                                <span className="meta-dot">•</span>
+                                {!video.isYouTube && <span className="meta-dot">•</span>}
                                 <span className="meta-section">{video.section}</span>
                               </>
                             )}
@@ -314,7 +363,9 @@ export default function HistoryPage({
                                         ? ` (${progressPercent}%)`
                                         : ""
                                     }`
-                                  : "▶ Started watching"}
+                                  : video.historySource === "youtube"
+                                    ? "▶ Watched on YouTube · Click to stream"
+                                    : "▶ Started watching"}
                             </span>
                           </div>
                         </div>
@@ -350,6 +401,67 @@ export default function HistoryPage({
               value={historySearch}
               onChange={(e) => setHistorySearch(e.target.value)}
             />
+          </div>
+
+          <div className="history-sidebar-section">
+            <h4>Filter by source</h4>
+            <div className="history-filter-pills">
+              <button
+                type="button"
+                className={`filter-pill ${sourceFilter === "ALL" ? "active" : ""}`}
+                onClick={() => setSourceFilter("ALL")}
+              >
+                All ({historyItems.length})
+              </button>
+              <button
+                type="button"
+                className={`filter-pill ${sourceFilter === "LIBRARY" ? "active" : ""}`}
+                onClick={() => setSourceFilter("LIBRARY")}
+              >
+                Library ({libraryCount})
+              </button>
+              <button
+                type="button"
+                className={`filter-pill ${sourceFilter === "YOUTUBE" ? "active" : ""}`}
+                onClick={() => setSourceFilter("YOUTUBE")}
+              >
+                YouTube ({youtubeCount})
+              </button>
+            </div>
+          </div>
+
+          <div className="history-sidebar-section">
+            <h4>YouTube Watch History</h4>
+            <div className="history-yt-sync-box">
+              {youtubeHistorySync?.liveConfigured && (
+                <button
+                  type="button"
+                  className="history-action-btn"
+                  disabled={syncingYouTube}
+                  onClick={handleQuickSyncYouTube}
+                >
+                  {syncingYouTube ? "Syncing from YouTube..." : "↻ Sync from YouTube"}
+                </button>
+              )}
+              {onOpenYouTubeHistorySync && (
+                <button
+                  type="button"
+                  className="history-action-btn"
+                  onClick={onOpenYouTubeHistorySync}
+                >
+                  ⚙ Connect / Import YouTube History
+                </button>
+              )}
+              {syncMessage && (
+                <p
+                  className={`history-yt-sync-msg ${
+                    syncMessage.type === "error" ? "is-error" : "is-success"
+                  }`}
+                >
+                  {syncMessage.text}
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="history-sidebar-section">

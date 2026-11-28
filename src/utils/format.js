@@ -15,3 +15,19 @@ export function formatDuration(seconds) {
   }
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
+
+// Compact view count: 1234 -> "1.2K views", 2500000 -> "2.5M views", 0/invalid -> "".
+export function formatViewCount(views) {
+  const num = Number(views);
+  if (!Number.isFinite(num) || num <= 0) return "";
+  if (num >= 1_000_000_000) {
+    return `${(num / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B views`;
+  }
+  if (num >= 1_000_000) {
+    return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, "")}M views`;
+  }
+  if (num >= 1_000) {
+    return `${(num / 1_000).toFixed(1).replace(/\.0$/, "")}K views`;
+  }
+  return `${Math.floor(num)} views`;
+}

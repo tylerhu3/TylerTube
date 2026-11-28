@@ -150,6 +150,7 @@ export function buildWebCodecsFfmpegArgs({
   audioInput = null,
   httpHeaders = "",
   isNetwork = false,
+  isShort = false,
   seek = 0,
   speed = 1,
   quality = 720,
@@ -166,7 +167,12 @@ export function buildWebCodecsFfmpegArgs({
     if (isNetwork) {
       args.push("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5");
       if (httpHeaders) args.push("-headers", httpHeaders);
-      args.push("-probesize", "65536", "-analyzeduration", "500000");
+      args.push(
+        "-probesize",
+        isShort ? "32768" : "65536",
+        "-analyzeduration",
+        isShort ? "250000" : "500000"
+      );
     }
     if (seek > 0) args.push("-ss", Number(seek).toFixed(3));
     args.push(
@@ -208,13 +214,13 @@ export function buildWebCodecsFfmpegArgs({
     "-level:v",
     level,
     "-preset",
-    "veryfast",
+    isShort ? "superfast" : "veryfast",
     "-tune",
     "zerolatency",
     "-bf",
     "0",
     "-g",
-    String(Math.max(1, Math.round(outFps * 2))), // keyframe every 2 s (seek/catch-up granularity)
+    String(Math.max(1, Math.round(outFps * (isShort ? 1 : 2)))), // keyframe every 1s (shorts) or 2s
     "-aud",
     "1",
     "-b:v",

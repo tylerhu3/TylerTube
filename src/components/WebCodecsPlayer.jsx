@@ -99,6 +99,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   const mediaDurationRef = useRef(0);
   const playbackSpeedRef = useRef(1);
   const currentQualityRef = useRef(720);
+  const userPickedQualityRef = useRef(false);
   const loopEnabledRef = useRef(false);
   const isPausedRef = useRef(false);
   const isEndedRef = useRef(false);
@@ -147,6 +148,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
   const [isPaused, setIsPaused] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
   const [isBuffering, setIsBuffering] = useState(true);
+  const [hasFirstFrame, setHasFirstFrame] = useState(false);
   const [bufferedAheadSec, setBufferedAheadSec] = useState(0);
   const [bufferedPct, setBufferedPct] = useState(0);
   const [bufferMode, setBufferMode] = useState("normal");
@@ -378,6 +380,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
 
   const handleSetQuality = useCallback(
     (q) => {
+      userPickedQualityRef.current = true;
       currentQualityRef.current = q;
       setQuality(q);
       seekBaseTimeRef.current = currentMediaTimeRef.current;
@@ -726,10 +729,18 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         ? resumeOverrideRef.current
         : null;
     resumeOverrideRef.current = null;
-    // getStartTime (from VideoPlayer) gives the exact position the other player left off at.
-    const requestedStart = override ? override.time : getStartTime?.() ?? initialSavedTimeRef.current;
+    const isShortVideo = Boolean(video?.isShort);
+    // Shorts always start cleanly at 0 unless resuming from a background handoff.
+    const requestedStart = override
+      ? override.time
+      : isShortVideo
+        ? 0
+        : getStartTime?.() ?? initialSavedTimeRef.current;
     const startSeek = Number(requestedStart) > 0 ? Number(requestedStart) : 0;
     let startPaused = Boolean(override && override.paused); // paused from the lock screen
+
+    // Shorts decode and transcode much faster at 480p (crisp in a 9:16 portrait frame) unless user picked a quality.
+    const streamQuality = isShortVideo && !userPickedQualityRef.current ? 480 : currentQualityRef.current;
 
     isPausedRef.current = false;
     isEndedRef.current = false;
@@ -748,6 +759,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     setIsPaused(startPaused);
     setIsEnded(false);
     setIsBuffering(!startPaused);
+    setHasFirstFrame(false);
     setBufferedAheadSec(0);
     setBufferedPct(0);
     setDisplayTime(startSeek);
@@ -760,11 +772,12 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl =
       `${wsProtocol}//${window.location.host}/ws/mpeg1?file=${encodeURIComponent(targetFile)}` +
-      `&quality=${currentQualityRef.current}` +
+      `&quality=${streamQuality}` +
       `&speed=${playbackSpeedRef.current}` +
       `&seek=${startSeek.toFixed(2)}` +
       `&loop=${loopEnabledRef.current ? "1" : "0"}` +
-      `&fps=${encodeURIComponent(String(requestedFpsRef.current))}`;
+      `&fps=${encodeURIComponent(String(requestedFpsRef.current))}` +
+      (isShortVideo ? "&short=1" : "");
 
     const applyStreamInfo = (msg) => {
       const sk = parseFloat(msg.seekTime) || 0;
@@ -855,6 +868,7 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         },
         onFrame: (streamSec) => {
           if (cancelled) return;
+          setHasFirstFrame((prev) => (prev ? prev : true));
           const dur = mediaDurationRef.current;
           const t = mediaTimeFromStream(
             seekBaseTimeRef.current,
@@ -1318,8 +1332,18 @@ const WebCodecsPlayer = forwardRef(function WebCodecsPlayer(
         statusText={statusText}
       />
 
+      {!hasFirstFrame && video?.poster && (
+        <img
+          src={video.poster}
+          alt=""
+          aria-hidden="true"
+          className="yt-poster-backdrop"
+          decoding="async"
+        />
+      )}
+
       <div
-        className="yt-canvas-ClickArea"
+        className={`yt-canvas-ClickArea ${hasFirstFrame ? "has-frame" : "awaiting-frame"}`}
         ref={canvasHostRef}
         onPointerDown={handleCanvasPointerDown}
         onTouchStart={handleCanvasTouchStart}
